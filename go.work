@@ -1,0 +1,11 @@
+go 1.22
+
+use (
+	./services/gateway
+	./services/auth
+	./services/database
+	./services/storage
+	./services/realtime
+	./shared
+	./cli
+)

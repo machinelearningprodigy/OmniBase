@@ -1,0 +1,277 @@
+name: omnibase
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OmniBase Local Development Stack
+# Run: docker compose up -d
+# Dashboard: http://localhost:3001
+# API: http://localhost:8000
+# MinIO Console: http://localhost:9001
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ─── PostgreSQL 17 ───────────────────────────────────────────────────────────
+  db:
+    container_name: omnibase-db
+    image: postgres:17-alpine
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256\nhost all all all scram-sha-256"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      POSTGRES_USER: ${POSTGRES_USER:-omnibase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnibase_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-omnibase}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
+      - ./migrations:/docker-entrypoint-initdb.d/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omnibase} -d ${POSTGRES_DB:-omnibase}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command: >
+      postgres
+        -c wal_level=logical
+        -c max_wal_senders=10
+        -c max_replication_slots=10
+        -c max_connections=200
+        -c shared_preload_libraries=pg_stat_statements
+    networks:
+      - omnibase_net
+
+  # ─── API Gateway (Go + Fiber) ────────────────────────────────────────────────
+  gateway:
+    container_name: omnibase-gateway
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    environment:
+      OMNIBASE_ENV: ${OMNIBASE_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      GATEWAY_PORT: 8000
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-change-in-production}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-omnibase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnibase_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-omnibase}
+      AUTH_SERVICE_URL: http://auth:9001
+      DATABASE_SERVICE_URL: http://database:9002
+      STORAGE_SERVICE_URL: http://storage:9003
+      REALTIME_SERVICE_URL: http://realtime:9004
+      POSTGREST_URL: http://postgrest:3000
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-1000}
+    depends_on:
+      db:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - omnibase_net
+
+  # ─── Auth Service ─────────────────────────────────────────────────────────────
+  auth:
+    container_name: omnibase-auth
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    restart: unless-stopped
+    environment:
+      OMNIBASE_ENV: ${OMNIBASE_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      AUTH_PORT: 9001
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-change-in-production}
+      JWT_ACCESS_EXPIRY: ${JWT_ACCESS_EXPIRY:-15m}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-720h}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-omnibase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnibase_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-omnibase}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_SENDER_EMAIL: ${SMTP_SENDER_EMAIL:-noreply@omnibase.dev}
+      SITE_URL: ${SITE_URL:-http://localhost:3001}
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL:-http://localhost:8000}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - omnibase_net
+
+  # ─── PostgREST (Auto-REST API) ────────────────────────────────────────────────
+  postgrest:
+    container_name: omnibase-postgrest
+    image: postgrest/postgrest:v12.2.0
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgres://${POSTGRES_USER:-omnibase}:${POSTGRES_PASSWORD:-omnibase_dev_password}@db:5432/${POSTGRES_DB:-omnibase}
+      PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS:-public}
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-change-in-production}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-change-in-production}
+      PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXPIRY:-900}
+      PGRST_LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - omnibase_net
+
+  # ─── Storage Service ──────────────────────────────────────────────────────────
+  storage:
+    container_name: omnibase-storage
+    build:
+      context: .
+      dockerfile: services/storage/Dockerfile
+    restart: unless-stopped
+    environment:
+      OMNIBASE_ENV: ${OMNIBASE_ENV:-development}
+      STORAGE_PORT: 9003
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-change-in-production}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-omnibase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnibase_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-omnibase}
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-omnibase-minio}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-omnibase-minio-secret}
+      MINIO_BUCKET: ${MINIO_BUCKET:-omnibase-storage}
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - omnibase_net
+
+  # ─── Realtime Service ─────────────────────────────────────────────────────────
+  realtime:
+    container_name: omnibase-realtime
+    build:
+      context: .
+      dockerfile: services/realtime/Dockerfile
+    restart: unless-stopped
+    environment:
+      OMNIBASE_ENV: ${OMNIBASE_ENV:-development}
+      REALTIME_PORT: 9004
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-change-in-production}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-omnibase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnibase_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-omnibase}
+      REPLICATION_SLOT: omnibase_realtime
+      REPLICATION_PUBLISHER: omnibase_publication
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - omnibase_net
+
+  # ─── MinIO (S3-compatible Storage Backend) ────────────────────────────────────
+  minio:
+    container_name: omnibase-minio
+    image: minio/minio:latest
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-omnibase-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-omnibase-minio-secret}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - omnibase_net
+
+  # ─── Valkey (Redis-compatible Cache + Sessions) ───────────────────────────────
+  valkey:
+    container_name: omnibase-valkey
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey_data:/data
+    command: valkey-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - omnibase_net
+
+  # ─── NATS JetStream (Message Queue) ──────────────────────────────────────────
+  nats:
+    container_name: omnibase-nats
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "4222:4222"
+      - "8222:8222"  # NATS monitoring
+    command: --js --sd /data -m 8222
+    volumes:
+      - nats_data:/data
+    networks:
+      - omnibase_net
+
+  # ─── Admin Dashboard (SvelteKit) ─────────────────────────────────────────────
+  dashboard:
+    container_name: omnibase-dashboard
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      PUBLIC_OMNIBASE_URL: http://localhost:8000
+      PUBLIC_OMNIBASE_ANON_KEY: ${ANON_KEY:-}
+    depends_on:
+      - gateway
+    networks:
+      - omnibase_net
+
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  db_data:
+  minio_data:
+  valkey_data:
+  nats_data:
+
+networks:
+  omnibase_net:
+    driver: bridge
