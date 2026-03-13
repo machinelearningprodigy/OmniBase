@@ -816,4 +816,4 @@ _OmniBase has the potential to be the Rails of backend infrastructure — opinio
 
 OmniBase Roadmap v1.0 — Open Source · Free Forever · Built for Developers
 
-**github.com/omnibase/omnibase**
+**github.com/machinelearningprodigy/OmniBase**

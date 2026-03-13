@@ -14,9 +14,9 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/helmet"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/omnibase/omnibase/shared/config"
-	"github.com/omnibase/omnibase/shared/logger"
-	"github.com/omnibase/omnibase/gateway/internal/router"
+	"github.com/machinelearningprodigy/OmniBase/shared/config"
+	"github.com/machinelearningprodigy/OmniBase/shared/logger"
+	"github.com/machinelearningprodigy/OmniBase/gateway/internal/router"
 	"go.uber.org/zap"
 )
 

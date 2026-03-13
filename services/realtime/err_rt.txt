@@ -1,0 +1,3 @@
+# github.com/machinelearningprodigy/OmniBase/realtime/internal/wal
+internal\wal\consumer.go:108:36: undefined: pgconn.ErrorResponse
+internal\wal\consumer.go:113:30: undefined: pgconn.CopyData

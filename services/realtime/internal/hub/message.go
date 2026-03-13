@@ -43,7 +43,7 @@ func (h *Hub) HandleMessage(client *Client, msg map[string]any) {
 
 		// Send confirmation
 		select {
-		case client.send <- []byte(`{"event":"system","payload":{"status":"ok"},"ref":null}`):
+		case client.Send <- []byte(`{"event":"system","payload":{"status":"ok"},"ref":null}`):
 		default:
 		}
 

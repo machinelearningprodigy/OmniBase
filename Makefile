@@ -25,7 +25,7 @@ logs-%:
 # ─── Building ─────────────────────────────────────────────────────────────────
 
 ## Build all Go services
-build: build-gateway build-auth build-storage build-realtime
+build: build-gateway build-auth build-database build-storage build-realtime
 
 build-gateway:
 	@echo "Building gateway..."
@@ -34,6 +34,10 @@ build-gateway:
 build-auth:
 	@echo "Building auth service..."
 	cd services/auth && go build -o ../../bin/omnibase-auth ./cmd/auth/...
+
+build-database:
+	@echo "Building database meta service..."
+	cd services/database && go build -o ../../bin/omnibase-database ./cmd/database/...
 
 build-storage:
 	@echo "Building storage service..."

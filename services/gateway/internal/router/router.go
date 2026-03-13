@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/omnibase/omnibase/shared/config"
-	"github.com/omnibase/omnibase/shared/jwt"
-	"github.com/omnibase/omnibase/gateway/internal/middleware"
-	"github.com/omnibase/omnibase/gateway/internal/proxy"
+	"github.com/machinelearningprodigy/OmniBase/shared/config"
+	"github.com/machinelearningprodigy/OmniBase/shared/jwt"
+	"github.com/machinelearningprodigy/OmniBase/gateway/internal/middleware"
+	"github.com/machinelearningprodigy/OmniBase/gateway/internal/proxy"
 	"go.uber.org/zap"
 )
 
@@ -61,7 +61,7 @@ func Register(app *fiber.App, cfg *config.Config, log *zap.Logger) {
 	app.All("/functions/v1/*", func(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotImplemented).JSON(fiber.Map{
 			"code":    "not_implemented",
-			"message": "Serverless Functions are coming in Phase 2. Subscribe to github.com/omnibase/omnibase for updates.",
+			"message": "Serverless Functions are coming in Phase 2. Subscribe to github.com/machinelearningprodigy/OmniBase for updates.",
 		})
 	})
 

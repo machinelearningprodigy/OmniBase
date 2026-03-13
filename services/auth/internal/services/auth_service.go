@@ -10,9 +10,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/omnibase/omnibase/shared/config"
-	"github.com/omnibase/omnibase/shared/jwt"
-	"github.com/omnibase/omnibase/shared/models"
+	"github.com/machinelearningprodigy/OmniBase/shared/config"
+	"github.com/machinelearningprodigy/OmniBase/shared/jwt"
+	"github.com/machinelearningprodigy/OmniBase/shared/models"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/argon2"
 )

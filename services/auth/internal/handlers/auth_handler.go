@@ -4,8 +4,8 @@ import (
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/omnibase/omnibase/auth/internal/services"
-	"github.com/omnibase/omnibase/shared/jwt"
+	"github.com/machinelearningprodigy/OmniBase/auth/internal/services"
+	"github.com/machinelearningprodigy/OmniBase/shared/jwt"
 	"go.uber.org/zap"
 )
 

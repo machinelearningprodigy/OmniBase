@@ -12,21 +12,24 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/google/uuid"
-	"github.com/omnibase/omnibase/realtime/internal/hub"
-	"github.com/omnibase/omnibase/realtime/internal/wal"
-	"github.com/omnibase/omnibase/shared/config"
-	"github.com/omnibase/omnibase/shared/jwt"
-	"github.com/omnibase/omnibase/shared/logger"
+	"github.com/machinelearningprodigy/OmniBase/realtime/internal/hub"
+	"github.com/machinelearningprodigy/OmniBase/realtime/internal/wal"
+	"github.com/machinelearningprodigy/OmniBase/shared/config"
+	"github.com/machinelearningprodigy/OmniBase/shared/jwt"
+	"github.com/machinelearningprodigy/OmniBase/shared/logger"
 	"go.uber.org/zap"
 )
 
 func main() {
-	cfg := config.Load()
-	log := logger.NewLogger(cfg.LogLevel)
+	cfg, err := config.Load()
+	if err != nil {
+		panic(err)
+	}
+	log := logger.MustNew(cfg.LogLevel, cfg.Env)
 	defer log.Sync()
 
 	// Initialize JWT manager for validating WS connections
-	jwtManager := jwt.NewJWTManager(cfg.JWTSecret, 15*time.Minute, 30*24*time.Hour)
+	jwtManager := jwt.NewManager(cfg.JWTSecret, 15*time.Minute, 30*24*time.Hour)
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
@@ -80,12 +83,10 @@ func main() {
 		var userID, role string
 		token := c.Query("apikey")
 		if token != "" {
-			claims, err := jwtManager.VerifyToken(token)
+			claims, err := jwtManager.Verify(token)
 			if err == nil {
-				userID = claims.Subject
-				if r, ok := claims.Claims["role"].(string); ok {
-					role = r
-				}
+				userID = claims.UserID
+				role = claims.Role
 			}
 		}
 		if role == "" {

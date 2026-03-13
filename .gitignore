@@ -1,0 +1,41 @@
+# Binaries
+/bin/
+omnibase-gateway
+omnibase-auth
+omnibase-storage
+omnibase-realtime
+
+# Environment
+.env
+.env.local
+
+# Node modules
+node_modules/
+.npm/
+.yarn/
+
+# Dashboard build
+dashboard/build/
+dashboard/.svelte-kit/
+dashboard/node_modules/
+
+# SDK build
+sdk/js/dist/
+sdk/js/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker / Volumes
+data/
+db_data/
+minio_data/
+valkey_data/
+nats_data/
+
+# OS
+.DS_Store
+Thumbs.db

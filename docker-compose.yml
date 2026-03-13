@@ -121,6 +121,33 @@ services:
     networks:
       - omnibase_net
 
+  # ─── Database Meta Service ───────────────────────────────────────────────────
+  database:
+    container_name: omnibase-database
+    build:
+      context: .
+      dockerfile: services/database/Dockerfile
+    restart: unless-stopped
+    environment:
+      OMNIBASE_ENV: ${OMNIBASE_ENV:-development}
+      DATABASE_META_PORT: 9005
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-change-in-production}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-omnibase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnibase_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-omnibase}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9005/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - omnibase_net
+
   # ─── PostgREST (Auto-REST API) ────────────────────────────────────────────────
   postgrest:
     container_name: omnibase-postgrest
@@ -252,8 +279,8 @@ services:
   dashboard:
     container_name: omnibase-dashboard
     build:
-      context: ./dashboard
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: dashboard/Dockerfile
     restart: unless-stopped
     ports:
       - "3001:3000"

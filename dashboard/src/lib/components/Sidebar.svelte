@@ -77,7 +77,7 @@
 
   <div style="margin-top: auto; padding: 12px 8px; border-top: 1px solid var(--border-subtle);">
     <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">OmniBase v0.1.0 · Phase 1</div>
-    <a href="https://github.com/omnibase/omnibase" target="_blank" rel="noopener" class="nav-item" style="font-size: 12px;">
+    <a href="https://github.com/machinelearningprodigy/OmniBase" target="_blank" rel="noopener" class="nav-item" style="font-size: 12px;">
       <span>★</span> Star on GitHub
     </a>
   </div>

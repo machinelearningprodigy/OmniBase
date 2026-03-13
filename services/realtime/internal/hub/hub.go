@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/gofiber/contrib/websocket"
-	"github.com/omnibase/omnibase/realtime/internal/wal"
+	"github.com/machinelearningprodigy/OmniBase/realtime/internal/wal"
 	"go.uber.org/zap"
 )
 

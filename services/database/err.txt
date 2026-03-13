@@ -1,0 +1,7 @@
+# github.com/machinelearningprodigy/OmniBase/database/cmd/database
+cmd\database\main.go:31:7: cfg.PostgresUser undefined (type *config.Config has no field or method PostgresUser)
+cmd\database\main.go:31:25: cfg.PostgresPassword undefined (type *config.Config has no field or method PostgresPassword)
+cmd\database\main.go:31:47: cfg.PostgresHost undefined (type *config.Config has no field or method PostgresHost)
+cmd\database\main.go:31:65: cfg.PostgresPort undefined (type *config.Config has no field or method PostgresPort)
+cmd\database\main.go:31:83: cfg.PostgresDB undefined (type *config.Config has no field or method PostgresDB)
+cmd\database\main.go:72:14: cfg.Get undefined (type *config.Config has no field or method Get)

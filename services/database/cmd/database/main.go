@@ -1,0 +1,77 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/jackc/pgx/v5"
+	"github.com/machinelearningprodigy/OmniBase/database/internal/handlers"
+	"github.com/machinelearningprodigy/OmniBase/database/internal/services"
+	"github.com/machinelearningprodigy/OmniBase/shared/config"
+	"github.com/machinelearningprodigy/OmniBase/shared/jwt"
+	"github.com/machinelearningprodigy/OmniBase/shared/logger"
+	"go.uber.org/zap"
+)
+
+func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		panic(err)
+	}
+	log := logger.MustNew(cfg.LogLevel, cfg.Env)
+	defer log.Sync()
+
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
+		cfg.DatabaseUser, cfg.DatabasePassword, cfg.DatabaseHost, cfg.DatabasePort, cfg.DatabaseName)
+
+	ctx := context.Background()
+	db, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		log.Fatal("failed to connect to database", zap.Error(err))
+	}
+	defer db.Close(ctx)
+
+	// Since we are validating tokens, we need the secret
+	jwtManager := jwt.NewManager(cfg.JWTSecret, 15*time.Minute, 30*24*time.Hour)
+	metaService := services.NewMetaService(db, log)
+	metaHandler := handlers.NewMetaHandler(metaService, jwtManager, log)
+
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Use(recover.New())
+
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.SendString("OK")
+	})
+
+	// Meta API configuration (raw queries, schema fetching for dashboard)
+	api := app.Group("/meta")
+
+	// Apply Auth Middleware for Meta service (Admin Only!)
+	api.Use(metaHandler.RequireServiceRole)
+
+	// Get tables metadata
+	api.Get("/tables", metaHandler.ListTables)
+
+	// Run arbitrary SQL queries
+	api.Post("/query", metaHandler.RunQuery)
+
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+		<-quit
+		log.Info("Shutting down database service...")
+		app.Shutdown()
+	}()
+
+	port := fmt.Sprintf("%d", cfg.DatabaseMetaPort)
+	log.Info("Database meta service starting", zap.String("port", port))
+	if err := app.Listen(":" + port); err != nil {
+		log.Fatal("Database meta service stopped", zap.Error(err))
+	}
+}

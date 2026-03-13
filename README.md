@@ -4,7 +4,7 @@
 > Combining the best of Supabase, Firebase, Appwrite, Convex, and PocketBase — into one.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache2.0-blue.svg)](LICENSE)
-[![Phase](https://img.shields.io/badge/Phase-1%20Foundation-brightgreen)](https://github.com/omnibase/omnibase)
+[![Phase](https://img.shields.io/badge/Phase-1%20Foundation-brightgreen)](https://github.com/machinelearningprodigy/OmniBase)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev)
 [![SvelteKit](https://img.shields.io/badge/Dashboard-SvelteKit-FF3E00?logo=svelte)](https://kit.svelte.dev)
 
@@ -34,7 +34,7 @@ OmniBase is a next-generation, 100% open-source Backend-as-a-Service (BaaS) plat
 
 ### 1. Clone and configure
 ```bash
-git clone https://github.com/omnibase/omnibase
+git clone https://github.com/machinelearningprodigy/OmniBase
 cd omnibase
 cp .env.example .env          # Edit with your settings
 ```
@@ -146,4 +146,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 - **Admin Dashboard**: MIT  
 - **Client SDKs**: MIT
 
-Built with ❤️ by the OmniBase contributors · [github.com/omnibase/omnibase](https://github.com/omnibase/omnibase)
+Built with ❤️ by the OmniBase contributors · [github.com/machinelearningprodigy/OmniBase](https://github.com/machinelearningprodigy/OmniBase)

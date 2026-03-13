@@ -11,10 +11,10 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/omnibase/omnibase/shared/config"
-	"github.com/omnibase/omnibase/shared/logger"
-	"github.com/omnibase/omnibase/auth/internal/handlers"
-	"github.com/omnibase/omnibase/auth/internal/services"
+	"github.com/machinelearningprodigy/OmniBase/shared/config"
+	"github.com/machinelearningprodigy/OmniBase/shared/logger"
+	"github.com/machinelearningprodigy/OmniBase/auth/internal/handlers"
+	"github.com/machinelearningprodigy/OmniBase/auth/internal/services"
 	"go.uber.org/zap"
 )
 

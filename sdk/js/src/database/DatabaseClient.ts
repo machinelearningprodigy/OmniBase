@@ -375,14 +375,14 @@ class PostgrestMutationBuilder<T> {
       url.searchParams.append(key, val)
     })
 
-    const headers = {
+    const headers: Record<string, string> = {
       ...this._getHeaders(),
       'Prefer': 'return=representation',
     }
 
     if (this._options?.isUpsert) {
       headers['Prefer'] = `resolution=merge-duplicates,${headers['Prefer']}`
-      headers['on-conflict'] = String(this._options.onConflict ?? 'id')
+      headers['on-conflict'] = String(this._options?.onConflict ?? 'id')
     }
 
     try {

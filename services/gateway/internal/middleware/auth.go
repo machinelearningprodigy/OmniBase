@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/omnibase/omnibase/shared/jwt"
+	"github.com/machinelearningprodigy/OmniBase/shared/jwt"
 	"go.uber.org/zap"
 )
 

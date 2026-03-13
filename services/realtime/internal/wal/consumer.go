@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgproto3"
 	"go.uber.org/zap"
 )
 
@@ -105,12 +106,12 @@ func (c *Consumer) consumeLoop(ctx context.Context) {
 			return
 		}
 
-		if errMsg, ok := rawMsg.(*pgconn.ErrorResponse); ok {
+		if errMsg, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
 			c.log.Error("WAL error from server", zap.String("msg", errMsg.Message))
 			continue
 		}
 
-		msg, ok := rawMsg.(*pgconn.CopyData)
+		msg, ok := rawMsg.(*pgproto3.CopyData)
 		if !ok {
 			continue
 		}
