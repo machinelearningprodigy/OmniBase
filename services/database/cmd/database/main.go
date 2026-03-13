@@ -49,14 +49,34 @@ func main() {
 		return c.SendString("OK")
 	})
 
+	// Public API (accessible via Gateway with any role)
+	public := app.Group("/api")
+	public.Post("/graphql", metaHandler.ResolveGraphQL)
+
 	// Meta API configuration (raw queries, schema fetching for dashboard)
 	api := app.Group("/meta")
-
-	// Apply Auth Middleware for Meta service (Admin Only!)
 	api.Use(metaHandler.RequireServiceRole)
 
 	// Get tables metadata
 	api.Get("/tables", metaHandler.ListTables)
+
+	// Create a new table
+	api.Post("/tables", metaHandler.CreateTable)
+
+	// Create a new project (schema)
+	api.Post("/projects", metaHandler.CreateProject)
+
+	// Functions metadata
+	api.Get("/functions", metaHandler.ListFunctions)
+
+	// Policies metadata
+	api.Get("/policies", metaHandler.ListPolicies)
+
+	// Schemas metadata
+	api.Get("/schemas", metaHandler.ListSchemas)
+
+	// Trigger schema reload
+	api.Post("/reload", metaHandler.ReloadSchema)
 
 	// Run arbitrary SQL queries
 	api.Post("/query", metaHandler.RunQuery)

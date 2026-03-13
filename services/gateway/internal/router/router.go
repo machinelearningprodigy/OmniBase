@@ -1,8 +1,6 @@
 package router
 
 import (
-	"fmt"
-
 	"github.com/gofiber/fiber/v2"
 	"github.com/machinelearningprodigy/OmniBase/shared/config"
 	"github.com/machinelearningprodigy/OmniBase/shared/jwt"
@@ -42,9 +40,7 @@ func Register(app *fiber.App, cfg *config.Config, log *zap.Logger) {
 	rest.Use(middleware.InjectUserContext(jwtManager))
 	rest.All("/*", restProxy.ForwardWithAuth)
 
-	// ─── GraphQL API Routes ───────────────────────────────────────────────────
-	// pg_graphql is embedded in PostgREST in newer versions; or runs separately
-	app.All("/graphql/v1/*", middleware.InjectUserContext(jwtManager), restProxy.ForwardWithAuth)
+	// ─── GraphQL API Routes ────────────── (Placeholder moved down) ──────────
 
 	// ─── Storage Routes ───────────────────────────────────────────────────────
 	storageProxy := proxy.NewProxy(cfg.StorageServiceURL, log)
@@ -58,18 +54,21 @@ func Register(app *fiber.App, cfg *config.Config, log *zap.Logger) {
 	app.Get("/realtime/v1/websocket", authRequired, realtimeProxy.ForwardWebSocket)
 
 	// ─── Functions Routes (Phase 2 placeholder) ───────────────────────────────
-	app.All("/functions/v1/*", func(c *fiber.Ctx) error {
-		return c.Status(fiber.StatusNotImplemented).JSON(fiber.Map{
-			"code":    "not_implemented",
-			"message": "Serverless Functions are coming in Phase 2. Subscribe to github.com/machinelearningprodigy/OmniBase for updates.",
-		})
-	})
+	functionsProxy := proxy.NewProxy(cfg.FunctionsServiceURL, log)
+	functions := app.Group("/functions/v1")
+	functions.All("/*", functionsProxy.Forward)
 
-	// ─── Database Meta Routes (admin only) ────────────────────────────────────
-	metaProxy := proxy.NewProxy(fmt.Sprintf("http://localhost:%d", cfg.DatabaseMetaPort), log)
-	meta := app.Group("/meta")
-	meta.Use(serviceRoleRequired)
-	meta.All("/*", metaProxy.Forward)
+	// ─── Database Meta Routes (admin only) — Renamed to /pg to match diagram ──
+	pgMetaProxy := proxy.NewProxy(cfg.DatabaseServiceURL, log)
+	pg := app.Group("/pg")
+	pg.Use(serviceRoleRequired)
+	pg.All("/*", pgMetaProxy.Forward)
+
+	// ─── GraphQL API Routes (hits the DB's pg_graphql extension) ──────────────
+	app.All("/graphql/v1", middleware.InjectUserContext(jwtManager), func(c *fiber.Ctx) error {
+		c.Path("/api/graphql") // Rewrite to database service internal route
+		return pgMetaProxy.ForwardWithAuth(c)
+	})
 
 	// ─── Admin API Routes (dashboard uses this) ────────────────────────────────
 	admin := app.Group("/admin/v1")
@@ -82,7 +81,7 @@ func Register(app *fiber.App, cfg *config.Config, log *zap.Logger) {
 	log.Info("Routes registered",
 		zap.Strings("groups", []string{
 			"/auth/v1", "/rest/v1", "/graphql/v1", "/storage/v1",
-			"/realtime/v1", "/functions/v1", "/meta", "/admin/v1",
+			"/realtime/v1", "/functions/v1", "/pg", "/admin/v1",
 		}),
 	)
 }

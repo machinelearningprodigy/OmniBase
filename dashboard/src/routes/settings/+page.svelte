@@ -26,7 +26,7 @@
     
     <div style="display: flex; gap: 8px;">
       <input type="text" class="input" value={url} readonly style="flex: 1; font-family: var(--font-mono); color: var(--text-primary);" />
-      <button class="btn btn-secondary" on:click={() => copy(url)}>Copy</button>
+      <button class="btn btn-secondary" onclick={() => copy(url)}>Copy</button>
     </div>
   </div>
 
@@ -47,7 +47,7 @@
       </p>
       <div style="display: flex; gap: 8px;">
         <input type="password" class="input" value={anonKey} readonly style="flex: 1; font-family: var(--font-mono);" />
-        <button class="btn btn-secondary" on:click={() => copy(anonKey)}>Copy</button>
+        <button class="btn btn-secondary" onclick={() => copy(anonKey)}>Copy</button>
       </div>
     </div>
 
@@ -64,7 +64,7 @@
       </p>
       <div style="display: flex; gap: 8px;">
         <input type="password" class="input" value={serviceKey} readonly style="flex: 1; font-family: var(--font-mono);" />
-        <button class="btn btn-secondary" on:click={() => copy(serviceKey)}>Copy</button>
+        <button class="btn btn-secondary" onclick={() => copy(serviceKey)}>Copy</button>
       </div>
     </div>
   </div>

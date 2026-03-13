@@ -14,8 +14,15 @@
       items: [
         { label: 'Table Editor', href: '/database', icon: 'table' },
         { label: 'SQL Editor', href: '/database/editor', icon: 'code' },
+        { label: 'DB Functions', href: '/database/functions', icon: 'zap' },
         { label: 'Migrations', href: '/database/migrations', icon: 'git-branch' },
         { label: 'RLS Policies', href: '/database/rls', icon: 'shield' },
+      ]
+    },
+    {
+      section: 'Logic',
+      items: [
+        { label: 'Edge Functions', href: '/functions', icon: 'zap' },
       ]
     },
     {
@@ -36,6 +43,12 @@
       section: 'Realtime',
       items: [
         { label: 'Inspector', href: '/realtime', icon: 'activity' },
+      ]
+    },
+    {
+      section: 'API',
+      items: [
+        { label: 'GraphQL', href: '/graphql', icon: 'zap' },
       ]
     },
   ]

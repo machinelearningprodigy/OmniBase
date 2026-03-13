@@ -26,8 +26,9 @@ type Config struct {
 	// ─── Services (internal URLs) ─────────────────────
 	AuthServiceURL     string
 	DatabaseServiceURL string
-	StorageServiceURL  string
-	RealtimeServiceURL string
+	StorageServiceURL   string
+	RealtimeServiceURL  string
+	FunctionsServiceURL string
 
 	// ─── Database ─────────────────────────────────────
 	DatabaseURL      string // Full postgres DSN
@@ -77,6 +78,9 @@ type Config struct {
 	ReplicationSlot      string
 	ReplicationPublisher string
 
+	// ─── Functions ────────────────────────────────────
+	FunctionsPort int
+
 	// ─── Cache (Valkey/Redis) ─────────────────────────
 	RedisURL      string
 	RedisPassword string
@@ -113,6 +117,7 @@ func Load() (*Config, error) {
 		DatabaseServiceURL: getEnv("DATABASE_SERVICE_URL", "http://localhost:9002"),
 		StorageServiceURL:  getEnv("STORAGE_SERVICE_URL", "http://localhost:9003"),
 		RealtimeServiceURL: getEnv("REALTIME_SERVICE_URL", "http://localhost:9004"),
+		FunctionsServiceURL: getEnv("FUNCTIONS_SERVICE_URL", "http://localhost:9006"),
 
 		DatabaseURL:      getEnv("DATABASE_URL", ""),
 		DatabaseHost:     getEnv("POSTGRES_HOST", "localhost"),
@@ -156,6 +161,8 @@ func Load() (*Config, error) {
 		RealtimePort:         getEnvInt("REALTIME_PORT", 9004),
 		ReplicationSlot:      getEnv("REPLICATION_SLOT", "omnibase_realtime"),
 		ReplicationPublisher: getEnv("REPLICATION_PUBLISHER", "omnibase_publication"),
+
+		FunctionsPort: getEnvInt("FUNCTIONS_PORT", 9006),
 
 		RedisURL:      getEnv("REDIS_URL", "redis://localhost:6379"),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),

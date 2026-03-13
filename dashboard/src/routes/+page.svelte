@@ -75,7 +75,7 @@
     <div class="card animate-fade-in">
       <div class="flex items-center justify-between mb-4" style="margin-bottom: 16px;">
         <h2 style="font-size: 15px; font-weight: 600;">Service Health</h2>
-        <button class="btn btn-secondary btn-sm" on:click={() => serviceHealth.refresh()}>
+        <button class="btn btn-secondary btn-sm" onclick={() => serviceHealth.refresh()}>
           Refresh
         </button>
       </div>

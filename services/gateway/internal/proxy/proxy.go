@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -70,7 +71,7 @@ func (p *Proxy) proxy(c *fiber.Ctx, injectAuth bool) error {
 		c.Context(),
 		c.Method(),
 		targetURL.String(),
-		c.Request().BodyStream(),
+		bytes.NewReader(c.Request().Body()),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create upstream request: %w", err)

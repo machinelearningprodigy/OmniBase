@@ -32,9 +32,13 @@ type Consumer struct {
 
 // NewConsumer creates a WAL consumer that connects to Postgres replication
 func NewConsumer(dsn, slot, pubName string, log *zap.Logger) (*Consumer, error) {
-	// Connect in replication mode
-	replicationDSN := dsn + " replication=database"
-	conn, err := pgconn.Connect(context.Background(), replicationDSN)
+	config, err := pgconn.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse replication dsn: %w", err)
+	}
+	config.RuntimeParams["replication"] = "database"
+
+	conn, err := pgconn.ConnectConfig(context.Background(), config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect for replication: %w", err)
 	}

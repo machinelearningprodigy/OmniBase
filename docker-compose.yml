@@ -10,10 +10,10 @@ name: omnibase
 
 services:
 
-  # ─── PostgreSQL 17 ───────────────────────────────────────────────────────────
+  # ─── PostgreSQL (Supabase Compatible) ─────────────────────────────────────────
   db:
     container_name: omnibase-db
-    image: postgres:17-alpine
+    image: supabase/postgres:15.6.1.137
     restart: unless-stopped
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
@@ -39,6 +39,7 @@ services:
         -c max_replication_slots=10
         -c max_connections=200
         -c shared_preload_libraries=pg_stat_statements
+        -c listen_addresses='*'
     networks:
       - omnibase_net
 
@@ -62,9 +63,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnibase_dev_password}
       POSTGRES_DB: ${POSTGRES_DB:-omnibase}
       AUTH_SERVICE_URL: http://auth:9001
-      DATABASE_SERVICE_URL: http://database:9002
+      DATABASE_SERVICE_URL: http://database:9005
       STORAGE_SERVICE_URL: http://storage:9003
       REALTIME_SERVICE_URL: http://realtime:9004
+      FUNCTIONS_SERVICE_URL: http://functions:9006
       POSTGREST_URL: http://postgrest:3000
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-1000}
     depends_on:
@@ -121,9 +123,9 @@ services:
     networks:
       - omnibase_net
 
-  # ─── Database Meta Service ───────────────────────────────────────────────────
+  # ─── pg-meta (Database Management) ───────────────────────────────────────────
   database:
-    container_name: omnibase-database
+    container_name: omnibase-pg-meta
     build:
       context: .
       dockerfile: services/database/Dockerfile
@@ -272,6 +274,28 @@ services:
     command: --js --sd /data -m 8222
     volumes:
       - nats_data:/data
+    networks:
+      - omnibase_net
+
+  # ─── Functions Service (Serverless) ───────────────────────────────────────────
+  functions:
+    container_name: omnibase-functions
+    build:
+      context: .
+      dockerfile: services/functions/Dockerfile
+    restart: unless-stopped
+    environment:
+      OMNIBASE_ENV: ${OMNIBASE_ENV:-development}
+      FUNCTIONS_PORT: 9006
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-change-in-production}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9006/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - omnibase_net
 

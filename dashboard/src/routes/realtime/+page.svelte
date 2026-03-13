@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
 
-  let logs: { time: string; event: string; payload: unknown }[] = []
+  let logs = $state<{ time: string; event: string; payload: unknown }[]>([])
   let ws: WebSocket | null = null
-  let status = 'disconnected'
+  let status = $state('disconnected')
 
   const OMNIBASE_WS_URL = 'ws://localhost:8000/realtime/v1/websocket'
 
@@ -62,7 +62,7 @@
     <div class="badge {status === 'connected' ? 'badge-success' : 'badge-warning'}">
       {status}
     </div>
-    <button class="btn btn-secondary btn-sm" on:click={() => logs = []}>Clear</button>
+    <button class="btn btn-secondary btn-sm" onclick={() => logs = []}>Clear</button>
   </div>
 </div>
 

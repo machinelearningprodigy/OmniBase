@@ -18,37 +18,72 @@
   let error = $state<string | null>(null)
   let searchQuery = $state('')
   let showCreateModal = $state(false)
+  let currentSchema = $state('public')
 
   const OMNIBASE_URL = 'http://localhost:8000'
 
   async function loadTables() {
     try {
       loading = true
-      // Fetch tables from postgres-meta service
-      const resp = await fetch(`${OMNIBASE_URL}/meta/tables?schema=public`, {
+      error = null
+      const resp = await fetch(`${OMNIBASE_URL}/pg/tables?schema=${currentSchema}`, {
         headers: getHeaders()
       })
       if (resp.ok) {
-        const data = await resp.json()
-        tables = data
+        tables = await resp.json()
       } else {
-        // Mock data for development without backend
-        tables = [
-          { name: 'users', schema: 'public', row_count: 127, size: '48 kB', has_rls: true },
-          { name: 'posts', schema: 'public', row_count: 532, size: '124 kB', has_rls: true },
-          { name: 'comments', schema: 'public', row_count: 1802, size: '256 kB', has_rls: false },
-          { name: 'tags', schema: 'public', row_count: 45, size: '12 kB', has_rls: false },
-        ]
+        const data = await resp.json().catch(() => ({}))
+        error = data.error || `Failed to load tables: ${resp.statusText}`
+        tables = []
       }
-    } catch {
-      // Use mock data if backend is not running
-      tables = [
-        { name: 'users', schema: 'public', row_count: 127, size: '48 kB', has_rls: true },
-        { name: 'posts', schema: 'public', row_count: 532, size: '124 kB', has_rls: true },
-        { name: 'comments', schema: 'public', row_count: 1802, size: '256 kB', has_rls: false },
-      ]
+    } catch (e) {
+      error = 'Could not connect to the API gateway. Is it running?'
+      tables = []
     } finally {
       loading = false
+    }
+  }
+
+  let newTableName = $state('')
+  let isCreating = $state(false)
+  let newTableColumns = $state([
+    { name: 'id', type: 'uuid', is_primary: true, is_nullable: false, default: 'gen_random_uuid()' },
+    { name: 'created_at', type: 'timestamp with time zone', is_primary: false, is_nullable: false, default: 'now()' }
+  ])
+
+  function addColumn() {
+    newTableColumns = [...newTableColumns, { name: '', type: 'text', is_primary: false, is_nullable: true, default: '' }]
+  }
+
+  async function createTable() {
+    if (!newTableName) return alert('Table name is required')
+    try {
+      isCreating = true
+      const resp = await fetch(`${OMNIBASE_URL}/pg/tables`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          name: newTableName,
+          schema: 'public',
+          columns: newTableColumns.filter(c => c.name)
+        })
+      })
+      if (resp.ok) {
+        showCreateModal = false
+        newTableName = ''
+        newTableColumns = [
+          { name: 'id', type: 'uuid', is_primary: true, is_nullable: false, default: 'gen_random_uuid()' },
+          { name: 'created_at', type: 'timestamp with time zone', is_primary: false, is_nullable: false, default: 'now()' }
+        ]
+        await loadTables()
+      } else {
+        const data = await resp.json()
+        alert(`Error: ${data.error}`)
+      }
+    } catch (e) {
+      alert('Failed to connect to gateway')
+    } finally {
+      isCreating = false
     }
   }
 
@@ -58,7 +93,10 @@
     error = null
     try {
       const resp = await fetch(`${OMNIBASE_URL}/rest/v1/${table.name}?limit=50&select=*`, {
-        headers: getHeaders()
+        headers: {
+          ...getHeaders(),
+          'Accept-Profile': table.schema
+        }
       })
       if (resp.ok) {
         tableData = await resp.json()
@@ -109,7 +147,19 @@
     t.name.toLowerCase().includes(searchQuery.toLowerCase())
   ))
 
-  onMount(loadTables)
+  onMount(() => {
+    currentSchema = localStorage.getItem('omnibase.current_schema') || 'public'
+    loadTables()
+
+    const handleSchemaChange = (e: any) => {
+      currentSchema = e.detail
+      selectedTable = null
+      loadTables()
+    }
+
+    window.addEventListener('omnibase:schema-change', handleSchemaChange)
+    return () => window.removeEventListener('omnibase:schema-change', handleSchemaChange)
+  })
 </script>
 
 <svelte:head>
@@ -123,7 +173,7 @@
     <div style="padding: 16px; border-bottom: 1px solid var(--border-subtle);">
       <div class="flex items-center justify-between" style="margin-bottom: 12px;">
         <span style="font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Tables</span>
-        <button class="btn btn-primary btn-sm" on:click={() => showCreateModal = true} id="create-table-btn">
+        <button class="btn btn-primary btn-sm" onclick={() => showCreateModal = true} id="create-table-btn">
           + New
         </button>
       </div>
@@ -149,7 +199,7 @@
         {#each filteredTables as table}
           <button
             class="nav-item {selectedTable === table.name ? 'active' : ''}"
-            on:click={() => selectTable(table)}
+            onclick={() => selectTable(table)}
             id="table-{table.name}"
           >
             <span style="font-size: 12px; font-family: var(--font-mono);">⊞</span>
@@ -175,7 +225,7 @@
         <p style="font-size: 48px;">◫</p>
         <h3>Select a table to explore</h3>
         <p>Choose a table from the sidebar to view and edit your data</p>
-        <button class="btn btn-primary" style="margin-top: 8px;" on:click={loadTables}>
+        <button class="btn btn-primary" style="margin-top: 8px;" onclick={loadTables}>
           {loading ? 'Loading...' : 'Refresh Tables'}
         </button>
       </div>
@@ -256,3 +306,96 @@
     {/if}
   </div>
 </div>
+
+{#if showCreateModal}
+  <div class="modal-overlay">
+    <div class="modal-card" style="width: 600px;">
+      <div class="modal-header">
+        <h3>Create a new table</h3>
+        <button class="btn-close" onclick={() => showCreateModal = false}>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group mb-4">
+          <label for="tableName">Name</label>
+          <input type="text" id="tableName" bind:value={newTableName} class="input" placeholder="e.g. profiles" />
+        </div>
+
+        <div class="mb-2" style="font-size: 13px; font-weight: 600;">Columns</div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          {#each newTableColumns as col, i}
+            <div style="display: grid; grid-template-columns: 1fr 1fr 80px 40px; gap: 8px; align-items: center;">
+              <input type="text" bind:value={col.name} class="input input-sm" placeholder="Column name" />
+              <select bind:value={col.type} class="input input-sm">
+                <option value="uuid">uuid</option>
+                <option value="text">text</option>
+                <option value="int8">bigint</option>
+                <option value="bool">boolean</option>
+                <option value="timestamp with time zone">timestamptz</option>
+                <option value="jsonb">jsonb</option>
+              </select>
+              <label style="font-size: 11px; display: flex; align-items: center; gap: 4px;">
+                <input type="checkbox" bind:checked={col.is_primary} /> PK
+              </label>
+              <button class="btn btn-secondary btn-sm" style="color: var(--status-error);" onclick={() => newTableColumns = newTableColumns.filter((_, idx) => idx !== i)}>×</button>
+            </div>
+          {/each}
+          <button class="btn btn-secondary btn-sm" style="align-self: flex-start; margin-top: 4px;" onclick={addColumn}>+ Add Column</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick={() => showCreateModal = false}>Cancel</button>
+        <button class="btn btn-primary" onclick={createTable} disabled={isCreating}>
+          {isCreating ? 'Creating...' : 'Create Table'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .modal-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    display: flex;
+    flex-direction: column;
+    max-height: 90vh;
+  }
+  .modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .modal-header h3 { font-size: 16px; margin: 0; }
+  .modal-body { padding: 20px; overflow-y: auto; }
+  .modal-footer {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+  }
+  .btn-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 24px;
+    cursor: pointer;
+  }
+</style>

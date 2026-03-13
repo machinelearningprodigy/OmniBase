@@ -13,16 +13,18 @@
   onMount(() => {
     authStore.init()
   })
+
+  let { children } = $props()
 </script>
 
 {#if isPublic}
-  <slot />
+  {@render children()}
 {:else}
   <div class="app-layout">
     <Topbar />
     <Sidebar />
     <main class="main-content">
-      <slot />
+      {@render children()}
     </main>
   </div>
 {/if}
