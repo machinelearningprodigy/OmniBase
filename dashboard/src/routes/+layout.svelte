@@ -8,7 +8,7 @@
 
   // Public routes that don't need layout
   const publicRoutes = ['/auth/login', '/auth/setup']
-  $: isPublic = publicRoutes.some(r => $page.url.pathname.startsWith(r))
+  let isPublic = $derived(publicRoutes.some(r => $page.url.pathname.startsWith(r)))
 
   onMount(() => {
     authStore.init()

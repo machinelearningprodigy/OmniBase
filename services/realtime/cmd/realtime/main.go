@@ -44,10 +44,10 @@ func main() {
 	eventHub := hub.NewHub(log)
 
 	// Start WAL Consumer
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s",
-		cfg.PostgresUser, cfg.PostgresPassword, cfg.PostgresHost, cfg.PostgresPort, cfg.PostgresDB)
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
+		cfg.DatabaseUser, cfg.DatabasePassword, cfg.DatabaseHost, cfg.DatabasePort, cfg.DatabaseName)
 	
-	walConsumer, err := wal.NewConsumer(dsn, cfg.Get("REPLICATION_SLOT", "omnibase_realtime"), cfg.Get("REPLICATION_PUBLISHER", "omnibase_publication"), log)
+	walConsumer, err := wal.NewConsumer(dsn, cfg.ReplicationSlot, cfg.ReplicationPublisher, log)
 	if err != nil {
 		log.Fatal("failed to initialize WAL consumer", zap.Error(err))
 	}
@@ -138,7 +138,7 @@ func main() {
 		app.Shutdown()
 	}()
 
-	port := cfg.Get("REALTIME_PORT", "9004")
+	port := fmt.Sprintf("%d", cfg.RealtimePort)
 	log.Info("Realtime service starting", zap.String("port", port))
 	if err := app.Listen(":" + port); err != nil {
 		log.Fatal("Realtime service stopped", zap.Error(err))

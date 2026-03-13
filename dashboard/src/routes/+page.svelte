@@ -10,21 +10,21 @@
     positive?: boolean
   }
 
-  let stats: StatCard[] = [
+  let stats = $state<StatCard[]>([
     { label: 'Database Rows', value: '—', delta: '+12% today', positive: true },
     { label: 'Active Users', value: '—', delta: '+3 today', positive: true },
     { label: 'API Requests', value: '—', delta: 'last 24h', positive: true },
     { label: 'Storage Used', value: '—' },
-  ]
+  ])
 
-  let recentActivity = [
+  let recentActivity = $state([
     { type: 'INSERT', table: 'users', time: '2 min ago', icon: '✦' },
     { type: 'UPDATE', table: 'posts', time: '5 min ago', icon: '✦' },
     { type: 'DELETE', table: 'sessions', time: '8 min ago', icon: '✦' },
     { type: 'INSERT', table: 'comments', time: '12 min ago', icon: '✦' },
-  ]
+  ])
 
-  $: health = $serviceHealth
+  let health = $derived($serviceHealth)
 
   onMount(async () => {
     serviceHealth.refresh()

@@ -9,15 +9,15 @@
     has_rls: boolean
   }
 
-  let tables: Table[] = []
-  let loading = true
-  let selectedTable: string | null = null
-  let tableData: Record<string, unknown>[] = []
-  let columns: { name: string; type: string }[] = []
-  let dataLoading = false
-  let error: string | null = null
-  let searchQuery = ''
-  let showCreateModal = false
+  let tables = $state<Table[]>([])
+  let loading = $state(true)
+  let selectedTable = $state<string | null>(null)
+  let tableData = $state<Record<string, unknown>[]>([])
+  let columns = $state<{ name: string; type: string }[]>([])
+  let dataLoading = $state(false)
+  let error = $state<string | null>(null)
+  let searchQuery = $state('')
+  let showCreateModal = $state(false)
 
   const OMNIBASE_URL = 'http://localhost:8000'
 
@@ -105,9 +105,9 @@
     return str.length > n ? str.slice(0, n) + '…' : str
   }
 
-  $: filteredTables = tables.filter(t =>
+  let filteredTables = $derived(tables.filter(t =>
     t.name.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  ))
 
   onMount(loadTables)
 </script>
