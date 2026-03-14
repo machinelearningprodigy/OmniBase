@@ -624,13 +624,20 @@
         headers: getHeaders(false)
       })
       if (!resp.ok) {
-        rowMutationError = await getErrorMessage(resp, 'Failed to delete table')
-        return
+        const errorMsg = await getErrorMessage(resp, 'Failed to delete table')
+        // If the table already doesn't exist, we consider it a success for the UI state
+        if (errorMsg.includes("does not exist") || errorMsg.includes("42P01")) {
+           console.log("Table already gone, clearing local state.")
+        } else {
+           rowMutationError = errorMsg
+           return
+        }
       }
       const deletedName = currentTable.name
       tables = tables.filter((table) => !(table.name === currentTable.name && table.schema === currentTable.schema))
       selectedTable = null
       selectedTableMeta = null
+      localStorage.removeItem('omnibase.last_created_table')
       tableData = []
       columns = []
       showDeleteTableModal = false
@@ -1066,8 +1073,21 @@
   <div class="modal-overlay">
     <div class="modal-card" style="width: 480px; border-top: 4px solid #ff5252;">
       <div class="modal-header"><h3 style="color: #ff5252;">Delete Table {selectedTableMeta.schema}.{selectedTableMeta.name}?</h3><button class="btn-close" onclick={() => showDeleteTableModal = false}>x</button></div>
-      <div class="modal-body"><p style="margin: 0; color: var(--text-secondary); line-height: 1.5;">This drops the table entirely, destroying all data within it. This action cannot be undone.</p></div>
-      <div class="modal-footer"><button class="btn btn-secondary" onclick={() => showDeleteTableModal = false}>Cancel</button><button class="btn btn-primary" style="background: #ff5252; border-color: #ff5252;" onclick={confirmDeleteTable} disabled={tableActionLoading}>{tableActionLoading ? 'Deleting...' : 'Delete Table'}</button></div>
+      <div class="modal-body">
+        {#if rowMutationError}
+          <div class="error-msg" style="margin: 0 0 16px 0; background: rgba(255, 82, 82, 0.1); border: 1px solid rgba(255, 82, 82, 0.2); border-radius: 6px; padding: 10px; color: #ff5252; font-size: 13px;">
+            <strong>Error:</strong> {rowMutationError}
+          </div>
+        {/if}
+        <p style="margin: 0; color: var(--text-secondary); line-height: 1.5;">This drops the table entirely, destroying all data within it. This action cannot be undone.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick={() => { showDeleteTableModal = false; rowMutationError = null; }}>Cancel</button>
+        <button class="btn btn-primary" style="background: #ff5252; border-color: #ff5252;" 
+                onclick={confirmDeleteTable} disabled={tableActionLoading}>
+          {tableActionLoading ? 'Deleting...' : 'Delete Table'}
+        </button>
+      </div>
     </div>
   </div>
 {/if}

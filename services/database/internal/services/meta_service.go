@@ -378,7 +378,7 @@ func (s *MetaService) DeleteTable(ctx context.Context, schema, table string) err
 		return fmt.Errorf("table is required")
 	}
 
-	_, err := s.db.Exec(ctx, fmt.Sprintf("DROP TABLE %s.%s", pgx.Identifier{schema}.Sanitize(), pgx.Identifier{table}.Sanitize()))
+	_, err := s.db.Exec(ctx, fmt.Sprintf("DROP TABLE %s.%s CASCADE", pgx.Identifier{schema}.Sanitize(), pgx.Identifier{table}.Sanitize()))
 	if err != nil {
 		return err
 	}
