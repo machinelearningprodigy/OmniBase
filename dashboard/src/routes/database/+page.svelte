@@ -635,6 +635,9 @@
       columns = []
       showDeleteTableModal = false
       tableNotice = `Table ${currentSchema}.${deletedName} deleted.`
+      
+      // Clear the table from the URL so loadTables doesn't try to re-focus it
+      await goto(`/database?schema=${currentSchema}`, { replaceState: true })
       await loadTables()
     } catch {
       rowMutationError = 'Failed to delete table.'

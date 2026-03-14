@@ -146,7 +146,21 @@
       <section class="fn-params-sec">
          <div class="params-header">ARGUMENTS</div>
          <div class="params-content">
-            {selectedFn.arguments || 'None'}
+            {#if !selectedFn.arguments || selectedFn.arguments === 'None'}
+               <span class="no-args">Function takes no arguments</span>
+            {:else}
+               <div class="args-list">
+                 {#each selectedFn.arguments.split(',') as arg}
+                   {@const parts = arg.trim().split(/\s+/)}
+                   <div class="arg-item">
+                     <span class="arg-name">{parts[0]}</span>
+                     {#if parts.length > 1}
+                       <span class="arg-type">{parts.slice(1).join(' ')}</span>
+                     {/if}
+                   </div>
+                 {/each}
+               </div>
+            {/if}
          </div>
       </section>
 
@@ -221,8 +235,14 @@
   .action-pill.highlight:hover { background: rgba(108, 71, 255, 0.1); }
 
   .fn-params-sec { padding: 32px 48px; background: rgba(255,255,255,0.01); border-bottom: 1px solid var(--border-subtle); }
-  .params-header { font-size: 11px; font-weight: 700; color: #444; margin-bottom: 14px; letter-spacing: 0.05em; }
+  .params-header { font-size: 11px; font-weight: 700; color: #444; margin-bottom: 16px; letter-spacing: 0.05em; }
   .params-content { font-family: var(--font-mono); font-size: 13px; color: #777; line-height: 1.6; }
+  
+  .args-list { display: flex; flex-direction: column; gap: 8px; }
+  .arg-item { display: inline-flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.03); padding: 6px 14px; border-radius: 6px; width: fit-content; border: 1px solid rgba(255,255,255,0.05); }
+  .arg-name { color: #f87171; font-weight: 600; font-size: 13px; }
+  .arg-type { color: var(--brand-blue, #60a5fa); font-size: 12px; }
+  .no-args { color: #555; font-style: italic; }
 
   .fn-code-sec { padding: 48px; }
   .code-wrapper { background: #020204; border-radius: 16px; display: flex; overflow: hidden; border: 1px solid rgba(255,255,255,0.03); box-shadow: 0 4px 30px rgba(0,0,0,0.5); }

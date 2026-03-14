@@ -421,6 +421,11 @@ func (s *MetaService) GetFunctions(ctx context.Context, schema string) ([]Functi
 		JOIN pg_namespace n ON n.oid = p.pronamespace
 		JOIN pg_language l ON l.oid = p.prolang
 		WHERE n.nspname = $1
+		  AND l.lanname NOT IN ('internal', 'c')
+		  AND NOT EXISTS (
+			SELECT 1 FROM pg_depend d
+			WHERE d.objid = p.oid AND d.deptype = 'e'
+		  )
 		ORDER BY p.proname;
 	`
 	rows, err := s.db.Query(ctx, query, schema)
@@ -448,7 +453,7 @@ func (s *MetaService) GetPolicies(ctx context.Context, schema string) ([]PolicyM
 			tablename as table,
 			cmd as action,
 			roles::text[] as roles,
-			qual as qualifier
+			COALESCE(qual, with_check, '') as qualifier
 		FROM pg_policies
 		WHERE schemaname = $1
 		ORDER BY tablename, policyname;

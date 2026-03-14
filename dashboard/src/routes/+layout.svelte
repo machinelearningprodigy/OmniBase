@@ -8,7 +8,7 @@
   import { onMount } from 'svelte'
   import { authStore } from '$lib/stores/auth'
 
-  const publicRoutes = ['/auth/login', '/auth/signup', '/auth/setup', '/auth/forgot-password', '/auth/reset-password']
+  const publicRoutes = ['/auth/login', '/auth/signup', '/auth/setup', '/auth/forgot-password', '/auth/reset-password', '/projects/new']
   let isPublic = $derived(publicRoutes.some((route) => $page.url.pathname.startsWith(route)))
   let authReady = $state(false)
 
@@ -50,7 +50,25 @@
 
     if ($authStore.user && (pathname === '/auth/login' || pathname === '/auth/signup' || pathname === '/auth/setup')) {
       const redirect = $page.url.searchParams.get('redirect')
-      goto(redirect || '/', { replaceState: true })
+      // After login, check if user has any projects — if not, redirect to project creation
+      if ($authStore.activeProject) {
+        goto(redirect || '/', { replaceState: true })
+      } else {
+        // No project yet — send to project creation (but only after brief delay to allow project fetch to complete)
+        setTimeout(async () => {
+          if (!$authStore.activeProject) {
+            goto(redirect ? `/projects/new?redirect=${encodeURIComponent(redirect)}` : '/projects/new', { replaceState: true })
+          } else {
+            goto(redirect || '/', { replaceState: true })
+          }
+        }, 800)
+      }
+      return
+    }
+
+    // Redirect to authenticated dashboard pages
+    if ($authStore.user && pathname === '/projects/new') {
+      // Already has a project? Only redirect if intentionally navigated here
     }
   })
 

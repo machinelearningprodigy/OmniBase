@@ -33,15 +33,16 @@
       })
       const data = await resp.json()
       if (resp.ok) {
-        // Store session if tokens returned (e.g. in development)
+        // Store session if tokens returned (e.g. in development mode)
         if (data.access_token) {
           localStorage.setItem('omnibase.session', JSON.stringify({
             access_token: data.access_token,
             refresh_token: data.refresh_token || '',
           }))
         }
+        // After signup, always go to project creation first
         const redirect = $page.url.searchParams.get('redirect')
-        await goto(redirect ? `/auth/login?redirect=${encodeURIComponent(redirect)}` : '/auth/login')
+        await goto(redirect ? `/projects/new?redirect=${encodeURIComponent(redirect)}` : '/projects/new')
       } else {
         error = (data as any).message || 'Sign up failed'
       }

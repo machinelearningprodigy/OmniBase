@@ -14,11 +14,13 @@ CREATE SCHEMA IF NOT EXISTS auth;
 CREATE SCHEMA IF NOT EXISTS storage;
 CREATE SCHEMA IF NOT EXISTS realtime;
 CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE SCHEMA IF NOT EXISTS omnibase;
 
 -- Grant schema usage to the main user
 GRANT USAGE ON SCHEMA auth TO omnibase;
 GRANT USAGE ON SCHEMA storage TO omnibase;
 GRANT USAGE ON SCHEMA realtime TO omnibase;
+GRANT USAGE ON SCHEMA omnibase TO omnibase;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Roles (mirrors Supabase role structure for compatibility)
@@ -215,3 +217,55 @@ GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 COMMENT ON SCHEMA public IS 'OmniBase public data schema — auto-REST and auto-GraphQL APIs are generated from this schema';
 COMMENT ON SCHEMA auth IS 'OmniBase authentication schema';
 COMMENT ON SCHEMA storage IS 'OmniBase storage schema';
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- OmniBase Internal Schema (platform metadata)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Projects table: users create projects, each gets stable anon + service keys
+CREATE TABLE IF NOT EXISTS omnibase.projects (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL,
+    slug            TEXT UNIQUE,
+    description     TEXT,
+    owner_id        UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    anon_key        TEXT,                         -- stable JWT anon key
+    service_key     TEXT,                         -- stable service_role JWT key
+    db_url          TEXT,                         -- for multi-project future support
+    region          TEXT DEFAULT 'us-east-1',
+    plan            TEXT DEFAULT 'free',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS omnibase_projects_owner_id_idx ON omnibase.projects(owner_id);
+
+-- Auth flow tokens (used by auth service for email verification, magic links, password reset)
+CREATE TABLE IF NOT EXISTS omnibase.auth_flow_tokens (
+    token_hash      TEXT PRIMARY KEY,
+    user_id         UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    email           TEXT,
+    token_type      TEXT NOT NULL,
+    redirect_to     TEXT,
+    expires_at      TIMESTAMPTZ NOT NULL,
+    consumed_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS auth_flow_tokens_user_id_idx ON omnibase.auth_flow_tokens(user_id);
+CREATE INDEX IF NOT EXISTS auth_flow_tokens_type_idx ON omnibase.auth_flow_tokens(token_type);
+
+-- OAuth states table (used by auth service for OAuth2 CSRF protection)
+CREATE TABLE IF NOT EXISTS omnibase.oauth_states (
+    state_hash      TEXT PRIMARY KEY,
+    provider        TEXT NOT NULL,
+    redirect_to     TEXT,
+    expires_at      TIMESTAMPTZ NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS oauth_states_provider_idx ON omnibase.oauth_states(provider);
+
+-- Grant permissions on omnibase schema tables
+GRANT ALL ON ALL TABLES IN SCHEMA omnibase TO omnibase, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA omnibase TO omnibase, service_role;

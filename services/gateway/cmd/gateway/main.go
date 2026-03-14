@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,10 +17,10 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/helmet"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/machinelearningprodigy/OmniBase/shared/config"
-	"github.com/machinelearningprodigy/OmniBase/shared/logger"
 	"github.com/machinelearningprodigy/OmniBase/gateway/internal/apilogs"
 	"github.com/machinelearningprodigy/OmniBase/gateway/internal/router"
+	"github.com/machinelearningprodigy/OmniBase/shared/config"
+	"github.com/machinelearningprodigy/OmniBase/shared/logger"
 	"go.uber.org/zap"
 )
 
@@ -152,8 +153,81 @@ func main() {
 		})
 	})
 
+	// /health/services — checks all internal services and returns aggregated status.
+	// Used by the dashboard (browser cannot directly reach internal service ports).
+	app.Get("/health/services", func(c *fiber.Ctx) error {
+		type ServiceCheck struct {
+			Name    string `json:"name"`
+			URL     string `json:"url"`
+			Status  string `json:"status"`
+			Latency int64  `json:"latency_ms"`
+		}
+
+		services := []struct {
+			name string
+			url  string
+		}{
+			{"Auth Service", cfg.AuthServiceURL + "/health"},
+			{"Storage Service", cfg.StorageServiceURL + "/health"},
+			{"Realtime Service", cfg.RealtimeServiceURL + "/health"},
+			{"Functions Service", cfg.FunctionsServiceURL + "/health"},
+			{"Database Service", cfg.DatabaseServiceURL + "/health"},
+			{"PostgREST", cfg.PostgRESTURL + "/"},
+		}
+
+		results := make([]ServiceCheck, len(services))
+		var wg sync.WaitGroup
+		for i, svc := range services {
+			wg.Add(1)
+			go func(idx int, name, url string) {
+				defer wg.Done()
+				start := time.Now()
+				ctx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
+				defer cancel()
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+				if err != nil {
+					results[idx] = ServiceCheck{Name: name, URL: url, Status: "down", Latency: 0}
+					return
+				}
+				resp, err := http.DefaultClient.Do(req)
+				latency := time.Since(start).Milliseconds()
+				if err != nil || resp == nil {
+					results[idx] = ServiceCheck{Name: name, URL: url, Status: "down", Latency: 0}
+					return
+				}
+				defer resp.Body.Close()
+				status := "healthy"
+				if resp.StatusCode >= 500 {
+					status = "degraded"
+				} else if resp.StatusCode >= 400 {
+					status = "degraded"
+				}
+				results[idx] = ServiceCheck{Name: name, URL: url, Status: status, Latency: latency}
+			}(i, svc.name, svc.url)
+		}
+		wg.Wait()
+
+		healthyCount := 0
+		for _, r := range results {
+			if r.Status == "healthy" {
+				healthyCount++
+			}
+		}
+		overall := "healthy"
+		if healthyCount == 0 {
+			overall = "down"
+		} else if healthyCount < len(results) {
+			overall = "degraded"
+		}
+		return c.JSON(fiber.Map{
+			"status":   overall,
+			"services": results,
+			"healthy":  healthyCount,
+			"total":    len(results),
+		})
+	})
+
 	app.Get("/ready", func(c *fiber.Ctx) error {
-		// Optional: ping downstream services for readiness (e.g. auth, postgrest)
 		ctx, cancel := context.WithTimeout(c.Context(), 2*time.Second)
 		defer cancel()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.AuthServiceURL+"/health", nil)

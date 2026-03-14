@@ -2,9 +2,10 @@ import { writable } from 'svelte/store'
 import { getOmniBaseUrl } from '$lib/api'
 
 interface AuthState {
-  user: { id: string; email: string; role: string } | null
+  user: { id: string; email: string; role: string; is_super_admin?: boolean } | null
   session: { access_token: string; refresh_token: string } | null
   loading: boolean
+  activeProject: { id: string; name: string; anon_key: string; service_key: string } | null
 }
 
 function createAuthStore() {
@@ -12,6 +13,7 @@ function createAuthStore() {
     user: null,
     session: null,
     loading: true,
+    activeProject: null,
   })
 
   async function refreshSession() {
@@ -36,6 +38,40 @@ function createAuthStore() {
     return newSession.access_token
   }
 
+  async function loadActiveProject(accessToken: string) {
+    const OMNIBASE_URL = getOmniBaseUrl()
+    try {
+      // Check localStorage for last active project
+      const storedProject = localStorage.getItem('omnibase.active_project')
+      if (storedProject) {
+        const proj = JSON.parse(storedProject)
+        update(s => ({ ...s, activeProject: proj }))
+        return proj
+      }
+
+      // Otherwise fetch first project from API
+      const resp = await fetch(`${OMNIBASE_URL}/admin/v1/projects`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      })
+      if (resp.ok) {
+        const projects = await resp.json()
+        if (projects && projects.length > 0) {
+          const proj = projects[0]
+          const activeProject = {
+            id: proj.id,
+            name: proj.name,
+            anon_key: proj.anon_key,
+            service_key: proj.service_key,
+          }
+          localStorage.setItem('omnibase.active_project', JSON.stringify(activeProject))
+          update(s => ({ ...s, activeProject }))
+          return activeProject
+        }
+      }
+    } catch {}
+    return null
+  }
+
   async function init() {
     try {
       const OMNIBASE_URL = getOmniBaseUrl()
@@ -48,7 +84,8 @@ function createAuthStore() {
           })
           if (resp.ok) {
             const user = await resp.json()
-            set({ user, session, loading: false })
+            set({ user, session, loading: false, activeProject: null })
+            await loadActiveProject(session.access_token)
             return
           }
           if (resp.status === 401 && session.refresh_token) {
@@ -60,7 +97,8 @@ function createAuthStore() {
               if (retry.ok) {
                 const user = await retry.json()
                 const newStored = localStorage.getItem('omnibase.session')
-                set({ user, session: newStored ? JSON.parse(newStored) : null, loading: false })
+                set({ user, session: newStored ? JSON.parse(newStored) : null, loading: false, activeProject: null })
+                await loadActiveProject(newToken)
                 return
               }
             }
@@ -68,7 +106,7 @@ function createAuthStore() {
         }
       }
     } catch {}
-    set({ user: null, session: null, loading: false })
+    set({ user: null, session: null, loading: false, activeProject: null })
   }
 
   async function signIn(email: string, password: string) {
@@ -84,7 +122,11 @@ function createAuthStore() {
         access_token: data.access_token,
         refresh_token: data.refresh_token
       }))
-      update(s => ({ ...s, user: data.user, session: data }))
+      update(s => ({ ...s, user: data.user, session: data, activeProject: null }))
+      // Load active project async
+      if (data.access_token) {
+        loadActiveProject(data.access_token)
+      }
       return { error: null }
     }
     return { error: data }
@@ -92,7 +134,8 @@ function createAuthStore() {
 
   async function signOut() {
     localStorage.removeItem('omnibase.session')
-    set({ user: null, session: null, loading: false })
+    localStorage.removeItem('omnibase.active_project')
+    set({ user: null, session: null, loading: false, activeProject: null })
   }
 
   async function setSessionFromHash(accessToken: string, refreshToken: string) {
@@ -104,13 +147,21 @@ function createAuthStore() {
         headers: { Authorization: `Bearer ${accessToken}` }
       })
       const user = resp.ok ? await resp.json() : null
-      set({ user, session, loading: false })
+      set({ user, session, loading: false, activeProject: null })
+      if (accessToken) {
+        await loadActiveProject(accessToken)
+      }
     } catch {
-      set({ user: null, session, loading: false })
+      set({ user: null, session, loading: false, activeProject: null })
     }
   }
 
-  return { subscribe, init, signIn, signOut, setSessionFromHash, refreshSession }
+  function setActiveProject(project: { id: string; name: string; anon_key: string; service_key: string }) {
+    localStorage.setItem('omnibase.active_project', JSON.stringify(project))
+    update(s => ({ ...s, activeProject: project }))
+  }
+
+  return { subscribe, init, signIn, signOut, setSessionFromHash, refreshSession, setActiveProject, loadActiveProject }
 }
 
 export const authStore = createAuthStore()
