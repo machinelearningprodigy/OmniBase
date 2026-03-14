@@ -1,11 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { getRealtimeUrl } from '$lib/api'
 
   let logs = $state<{ time: string; event: string; payload: unknown }[]>([])
   let ws: WebSocket | null = null
   let status = $state('disconnected')
-
-  const OMNIBASE_WS_URL = 'ws://localhost:8000/realtime/v1/websocket'
 
   onMount(() => {
     connect()
@@ -17,7 +16,7 @@
 
   function connect() {
     status = 'connecting'
-    ws = new WebSocket(OMNIBASE_WS_URL)
+    ws = new WebSocket(getRealtimeUrl())
 
     ws.onopen = () => {
       status = 'connected'

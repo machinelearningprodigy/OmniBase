@@ -6,6 +6,7 @@
       section: 'Project',
       items: [
         { label: 'Overview', href: '/', icon: 'home' },
+        { label: 'API Logs', href: '/logs', icon: 'zap' },
         { label: 'API Settings', href: '/settings', icon: 'settings' },
       ]
     },

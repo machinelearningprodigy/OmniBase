@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { getHeaders, getOmniBaseUrl } from '$lib/api'
 
   interface Migration {
     id: number
@@ -11,39 +12,16 @@
   let loading = $state(true)
   let error = $state<string | null>(null)
 
-  const OMNIBASE_URL = 'http://localhost:8000'
-
-  function getHeaders() {
-    const session = typeof localStorage !== 'undefined' ? localStorage.getItem('omnibase.session') : null
-    const token = session ? JSON.parse(session).access_token : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    }
-  }
-
   async function loadMigrations() {
     try {
       loading = true
       error = null
-      // Try to fetch from a migrations table
-      const query = "SELECT id, name, executed_at FROM omnibase.migrations ORDER BY id DESC"
-      const resp = await fetch(`${OMNIBASE_URL}/pg/query`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ query })
-      })
-      
+      const resp = await fetch(`${getOmniBaseUrl()}/pg/migrations`, { headers: getHeaders() })
       const data = await resp.json()
       if (resp.ok) {
         migrations = data
       } else {
-        // If table doesn't exist, it's not an error we want to show as break, just empty
-        if (data.error && data.error.includes('does not exist')) {
-          migrations = []
-        } else {
-          error = data.error
-        }
+        error = data.error || 'Failed to load migrations'
       }
     } catch (e) {
       error = 'Connection error'

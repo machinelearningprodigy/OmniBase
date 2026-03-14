@@ -13,13 +13,15 @@ type MetaHandler struct {
 	service *services.MetaService
 	jwt     *jwt.Manager
 	log     *zap.Logger
+	env     string
 }
 
-func NewMetaHandler(service *services.MetaService, jwtManager *jwt.Manager, log *zap.Logger) *MetaHandler {
+func NewMetaHandler(service *services.MetaService, jwtManager *jwt.Manager, log *zap.Logger, env string) *MetaHandler {
 	return &MetaHandler{
 		service: service,
 		jwt:     jwtManager,
 		log:     log,
+		env:     env,
 	}
 }
 
@@ -43,9 +45,37 @@ func (h *MetaHandler) RequireServiceRole(c *fiber.Ctx) error {
 	return c.Next()
 }
 
+func (h *MetaHandler) RequireAdmin(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Missing token"})
+	}
+
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	claims, err := h.jwt.Verify(token)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})
+	}
+	if claims.Role == "service_role" {
+		return c.Next()
+	}
+	if h.env == "development" && claims.Role == "authenticated" {
+		return c.Next()
+	}
+
+	var isSuperAdmin bool
+	if err := h.service.DB().QueryRow(c.Context(), "SELECT is_super_admin FROM auth.users WHERE id = $1", claims.UserID).Scan(&isSuperAdmin); err != nil {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Admin access required"})
+	}
+	if !isSuperAdmin {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Admin access required"})
+	}
+	return c.Next()
+}
+
 func (h *MetaHandler) ListTables(c *fiber.Ctx) error {
 	schema := c.Query("schema", "public")
-	
+
 	tables, err := h.service.GetTables(c.Context(), schema)
 	if err != nil {
 		h.log.Error("failed to get tables", zap.Error(err))
@@ -55,11 +85,28 @@ func (h *MetaHandler) ListTables(c *fiber.Ctx) error {
 	return c.JSON(tables)
 }
 
+func (h *MetaHandler) ListTableColumns(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	table := strings.TrimSpace(c.Query("table"))
+	if table == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "table is required"})
+	}
+
+	columns, err := h.service.GetTableColumns(c.Context(), schema, table)
+	if err != nil {
+		h.log.Error("failed to get table columns", zap.Error(err), zap.String("schema", schema), zap.String("table", table))
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(columns)
+}
+
 func (h *MetaHandler) RunQuery(c *fiber.Ctx) error {
 	var payload struct {
-		Query string `json:"query"`
+		Query         string `json:"query"`
+		MigrationName string `json:"migration_name"`
 	}
-	
+
 	if err := c.BodyParser(&payload); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
 	}
@@ -68,12 +115,20 @@ func (h *MetaHandler) RunQuery(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "query cannot be empty"})
 	}
 
-	results, err := h.service.RunQuery(c.Context(), payload.Query)
+	results, err := h.service.RunQuery(c.Context(), payload.Query, payload.MigrationName)
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()}) // Return Postgres error directly to user
 	}
 
 	return c.JSON(results)
+}
+
+func (h *MetaHandler) ListMigrations(c *fiber.Ctx) error {
+	migrations, err := h.service.ListMigrations(c.Context())
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(migrations)
 }
 
 func (h *MetaHandler) CreateTable(c *fiber.Ctx) error {
@@ -108,6 +163,46 @@ func (h *MetaHandler) CreateProject(c *fiber.Ctx) error {
 	}
 
 	return c.Status(201).JSON(fiber.Map{"message": "project created"})
+}
+
+func (h *MetaHandler) ToggleRLS(c *fiber.Ctx) error {
+	var payload struct {
+		Schema  string `json:"schema"`
+		Table   string `json:"table"`
+		Enabled bool   `json:"enabled"`
+	}
+
+	if err := c.BodyParser(&payload); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if strings.TrimSpace(payload.Table) == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "table is required"})
+	}
+	if strings.TrimSpace(payload.Schema) == "" {
+		payload.Schema = "public"
+	}
+
+	if err := h.service.SetRLSEnabled(c.Context(), payload.Schema, payload.Table, payload.Enabled); err != nil {
+		h.log.Error("failed to toggle rls", zap.Error(err), zap.String("schema", payload.Schema), zap.String("table", payload.Table), zap.Bool("enabled", payload.Enabled))
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"message": "rls updated"})
+}
+
+func (h *MetaHandler) DeleteTable(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	table := strings.TrimSpace(c.Query("table"))
+	if table == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "table is required"})
+	}
+
+	if err := h.service.DeleteTable(c.Context(), schema, table); err != nil {
+		h.log.Error("failed to delete table", zap.Error(err), zap.String("schema", schema), zap.String("table", table))
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"message": "table deleted"})
 }
 
 func (h *MetaHandler) ListFunctions(c *fiber.Ctx) error {
@@ -170,5 +265,3 @@ func (h *MetaHandler) ResolveGraphQL(c *fiber.Ctx) error {
 
 	return c.JSON(result)
 }
-
-

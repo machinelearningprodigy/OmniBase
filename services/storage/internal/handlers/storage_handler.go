@@ -104,6 +104,29 @@ func (h *StorageHandler) UploadObject(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"Key": fmt.Sprintf("%s/%s", bucketID, path)})
 }
 
+// ListObjects lists all objects in a bucket (POST with optional prefix filter)
+func (h *StorageHandler) ListObjects(c *fiber.Ctx) error {
+	bucketID := c.Params("bucket")
+
+	var body struct {
+		Prefix string `json:"prefix"`
+		Limit  int    `json:"limit"`
+	}
+	c.BodyParser(&body)
+
+	objects, err := h.service.ListObjects(c.Context(), bucketID, body.Prefix, body.Limit)
+	if err != nil {
+		h.log.Error("list objects error", zap.Error(err))
+		return c.Status(500).JSON(fiber.Map{"error": "failed to list objects"})
+	}
+
+	if objects == nil {
+		objects = []services.StorageObjectMeta{}
+	}
+	return c.JSON(objects)
+}
+
+
 func (h *StorageHandler) DeleteObjects(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(string)
 	bucketID := c.Params("bucket")

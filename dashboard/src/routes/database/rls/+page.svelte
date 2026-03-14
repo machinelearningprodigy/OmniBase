@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { getErrorMessage, getHeaders, getOmniBaseUrl, apiFetch } from '$lib/api'
 
   interface Policy {
     name: string
@@ -20,25 +21,14 @@
   let loading = $state(true)
   let error = $state<string | null>(null)
 
-  const OMNIBASE_URL = 'http://localhost:8000'
-
-  function getHeaders() {
-    const session = typeof localStorage !== 'undefined' ? localStorage.getItem('omnibase.session') : null
-    const token = session ? JSON.parse(session).access_token : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    }
-  }
-
   async function loadData() {
     try {
       loading = true
       error = null
       
       const [tableResp, policyResp] = await Promise.all([
-        fetch(`${OMNIBASE_URL}/pg/tables?schema=public`, { headers: getHeaders() }),
-        fetch(`${OMNIBASE_URL}/pg/policies?schema=public`, { headers: getHeaders() })
+        apiFetch(`${getOmniBaseUrl()}/pg/tables?schema=public`, { headers: getHeaders() }),
+        apiFetch(`${getOmniBaseUrl()}/pg/policies?schema=public`, { headers: getHeaders() })
       ])
 
       if (tableResp.ok && policyResp.ok) {
@@ -57,7 +47,7 @@
   async function toggleRLS(table: string, current: boolean) {
     const sql = `ALTER TABLE public."${table}" ${current ? 'DISABLE' : 'ENABLE'} ROW LEVEL SECURITY;`
     try {
-      const resp = await fetch(`${OMNIBASE_URL}/pg/query`, {
+      const resp = await apiFetch(`${getOmniBaseUrl()}/pg/query`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ query: sql })
@@ -65,8 +55,7 @@
       if (resp.ok) {
         await loadData()
       } else {
-        const d = await resp.json()
-        alert(d.error)
+        alert(await getErrorMessage(resp, 'Failed to toggle RLS'))
       }
     } catch (e) {
       alert('Error toggling RLS')

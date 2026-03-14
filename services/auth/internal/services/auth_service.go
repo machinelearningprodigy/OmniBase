@@ -3,9 +3,15 @@ package services
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +30,7 @@ type AuthService struct {
 	cfg        *config.Config
 	log        *zap.Logger
 	mailer     Mailer
+	client     *http.Client
 }
 
 // Mailer interface — swappable SMTP adapter (Resend, SendGrid, etc.)
@@ -42,16 +49,26 @@ func NewAuthService(cfg *config.Config, log *zap.Logger) (*AuthService, error) {
 
 	jwtManager := jwt.NewManager(cfg.JWTSecret, cfg.JWTAccessExpiry, cfg.JWTRefreshExpiry)
 
-	return &AuthService{
+	service := &AuthService{
 		db:         pool,
 		jwtManager: jwtManager,
 		cfg:        cfg,
 		log:        log,
-	}, nil
+		client:     &http.Client{Timeout: 20 * time.Second},
+	}
+	if err := service.ensureSystemTables(context.Background()); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return service, nil
 }
 
 func (s *AuthService) Close() {
 	s.db.Close()
+}
+
+func (s *AuthService) VerifyToken(token string) (*jwt.Claims, error) {
+	return s.jwtManager.Verify(token)
 }
 
 // ─── Core Auth Operations ──────────────────────────────────────────────────────
@@ -65,9 +82,18 @@ type SignUpRequest struct {
 }
 
 type SignUpOptions struct {
-	Data     map[string]any `json:"data"`       // User metadata
-	RedirectTo string       `json:"redirectTo"` // Post-verification redirect
+	Data       map[string]any `json:"data"`       // User metadata
+	RedirectTo string         `json:"redirectTo"` // Post-verification redirect
 }
+
+type ActionLinkType string
+
+const (
+	ActionLinkSignup      ActionLinkType = "signup"
+	ActionLinkInvite      ActionLinkType = "invite"
+	ActionLinkRecovery    ActionLinkType = "recovery"
+	ActionLinkMagicLogin  ActionLinkType = "magic_link"
+)
 
 // SignUpResponse includes the user and tokens
 type SignUpResponse struct {
@@ -106,14 +132,22 @@ func (s *AuthService) SignUp(ctx context.Context, req SignUpRequest) (*SignUpRes
 	// Create user
 	userID := uuid.New().String()
 	now := time.Now().UTC()
+	var userCount int64
+	if err := s.db.QueryRow(ctx, "SELECT COUNT(*) FROM auth.users").Scan(&userCount); err != nil {
+		return nil, fmt.Errorf("failed to count users: %w", err)
+	}
 
 	user := &models.User{
 		ID:           userID,
 		Email:        req.Email,
 		PasswordHash: passwordHash,
 		Role:         "authenticated",
+		IsSuperAdmin: userCount == 0,
 		CreatedAt:    now,
 		UpdatedAt:    now,
+	}
+	if s.cfg.Env == "development" {
+		user.EmailConfirmedAt = &now
 	}
 
 	if req.Options != nil && req.Options.Data != nil {
@@ -121,9 +155,11 @@ func (s *AuthService) SignUp(ctx context.Context, req SignUpRequest) (*SignUpRes
 	}
 
 	_, err = s.db.Exec(ctx, `
-		INSERT INTO auth.users (id, email, password_hash, role, raw_user_meta_data, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, user.ID, user.Email, user.PasswordHash, user.Role, user.RawUserMetaData, user.CreatedAt, user.UpdatedAt)
+		INSERT INTO auth.users (
+			id, email, password_hash, role, raw_user_meta_data, is_super_admin, email_confirmed_at, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, user.ID, user.Email, user.PasswordHash, user.Role, user.RawUserMetaData, user.IsSuperAdmin, user.EmailConfirmedAt, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
@@ -136,7 +172,7 @@ func (s *AuthService) SignUp(ctx context.Context, req SignUpRequest) (*SignUpRes
 	// Issue tokens only if email auto-confirm is enabled
 	if s.cfg.Env == "development" {
 		// In development, auto-confirm and issue tokens
-		accessToken, refreshToken, err := s.issueTokenPair(user)
+		accessToken, refreshToken, err := s.issueTokenPair(ctx, user, "", "")
 		if err != nil {
 			return nil, err
 		}
@@ -155,7 +191,7 @@ func (s *AuthService) SignUp(ctx context.Context, req SignUpRequest) (*SignUpRes
 
 // SignInRequest for password-based login
 type SignInRequest struct {
-	GrantType    string `json:"grant_type"`   // "password" | "refresh_token"
+	GrantType    string `json:"grant_type"` // "password" | "refresh_token"
 	Email        string `json:"email,omitempty"`
 	Password     string `json:"password,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
@@ -180,10 +216,10 @@ func (s *AuthService) signInWithPassword(ctx context.Context, req SignInRequest)
 
 	var user models.User
 	err := s.db.QueryRow(ctx, `
-		SELECT id, email, password_hash, role, is_banned, email_confirmed_at, last_sign_in_at, created_at, updated_at
+		SELECT id, email, password_hash, role, is_super_admin, is_banned, email_confirmed_at, last_sign_in_at, created_at, updated_at
 		FROM auth.users WHERE email = $1
 	`, req.Email).Scan(
-		&user.ID, &user.Email, &user.PasswordHash, &user.Role,
+		&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.IsSuperAdmin,
 		&user.IsBanned, &user.EmailConfirmedAt, &user.LastSignInAt,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
@@ -195,6 +231,9 @@ func (s *AuthService) signInWithPassword(ctx context.Context, req SignInRequest)
 	if user.IsBanned {
 		return nil, &AuthError{Code: "user_banned", Message: "This account has been suspended"}
 	}
+	if s.cfg.Env != "development" && user.EmailConfirmedAt == nil {
+		return nil, &AuthError{Code: "email_not_confirmed", Message: "Email address has not been confirmed"}
+	}
 
 	if !verifyPassword(req.Password, user.PasswordHash) {
 		return nil, &AuthError{Code: "invalid_credentials", Message: "Invalid email or password"}
@@ -203,7 +242,7 @@ func (s *AuthService) signInWithPassword(ctx context.Context, req SignInRequest)
 	// Update last sign in
 	s.db.Exec(ctx, "UPDATE auth.users SET last_sign_in_at = NOW() WHERE id = $1", user.ID)
 
-	accessToken, refreshToken, err := s.issueTokenPair(&user)
+	accessToken, refreshToken, err := s.issueTokenPair(ctx, &user, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -232,13 +271,27 @@ func (s *AuthService) refreshTokenGrant(ctx context.Context, refreshToken string
 	// Get fresh user data
 	var user models.User
 	err = s.db.QueryRow(ctx, `
-		SELECT id, email, role, is_banned FROM auth.users WHERE id = $1
-	`, claims.UserID).Scan(&user.ID, &user.Email, &user.Role, &user.IsBanned)
+		SELECT id, email, role, is_super_admin, is_banned FROM auth.users WHERE id = $1
+	`, claims.UserID).Scan(&user.ID, &user.Email, &user.Role, &user.IsSuperAdmin, &user.IsBanned)
 	if err != nil || user.IsBanned {
 		return nil, &AuthError{Code: "invalid_refresh_token", Message: "User not found or banned"}
 	}
 
-	accessToken, newRefreshToken, err := s.issueTokenPair(&user)
+	var sessionExists bool
+	if err := s.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM auth.sessions
+			WHERE user_id = $1 AND refresh_token = $2 AND expires_at > NOW()
+		)
+	`, claims.UserID, refreshToken).Scan(&sessionExists); err != nil || !sessionExists {
+		return nil, &AuthError{Code: "invalid_refresh_token", Message: "Refresh session not found or expired"}
+	}
+
+	if err := s.revokeRefreshToken(ctx, refreshToken); err != nil {
+		s.log.Warn("failed to revoke previous refresh token", zap.Error(err), zap.String("user_id", claims.UserID))
+	}
+
+	accessToken, newRefreshToken, err := s.issueTokenPair(ctx, &user, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -257,12 +310,12 @@ func (s *AuthService) GetUser(ctx context.Context, userID string) (*models.User,
 	var user models.User
 	err := s.db.QueryRow(ctx, `
 		SELECT id, email, role, is_banned, email_confirmed_at, last_sign_in_at, 
-		       raw_user_meta_data, raw_app_meta_data, created_at, updated_at
+		       raw_user_meta_data, raw_app_meta_data, is_super_admin, created_at, updated_at
 		FROM auth.users WHERE id = $1
 	`, userID).Scan(
 		&user.ID, &user.Email, &user.Role, &user.IsBanned,
 		&user.EmailConfirmedAt, &user.LastSignInAt,
-		&user.RawUserMetaData, &user.RawAppMetaData,
+		&user.RawUserMetaData, &user.RawAppMetaData, &user.IsSuperAdmin,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
 	if err != nil {
@@ -279,7 +332,7 @@ func (s *AuthService) AdminListUsers(ctx context.Context, page, perPage int) ([]
 	s.db.QueryRow(ctx, "SELECT COUNT(*) FROM auth.users").Scan(&total)
 
 	rows, err := s.db.Query(ctx, `
-		SELECT id, email, role, is_banned, email_confirmed_at, last_sign_in_at, created_at, updated_at
+		SELECT id, email, role, is_super_admin, is_banned, email_confirmed_at, last_sign_in_at, created_at, updated_at
 		FROM auth.users ORDER BY created_at DESC LIMIT $1 OFFSET $2
 	`, perPage, offset)
 	if err != nil {
@@ -290,16 +343,463 @@ func (s *AuthService) AdminListUsers(ctx context.Context, page, perPage int) ([]
 	var users []*models.User
 	for rows.Next() {
 		var u models.User
-		rows.Scan(&u.ID, &u.Email, &u.Role, &u.IsBanned, &u.EmailConfirmedAt, &u.LastSignInAt, &u.CreatedAt, &u.UpdatedAt)
+		rows.Scan(&u.ID, &u.Email, &u.Role, &u.IsSuperAdmin, &u.IsBanned, &u.EmailConfirmedAt, &u.LastSignInAt, &u.CreatedAt, &u.UpdatedAt)
 		users = append(users, &u)
 	}
 
 	return users, total, nil
 }
 
+// AdminDeleteUser permanently deletes a user
+func (s *AuthService) AdminDeleteUser(ctx context.Context, userID string) error {
+	result, err := s.db.Exec(ctx, "DELETE FROM auth.users WHERE id = $1", userID)
+	if err != nil {
+		return fmt.Errorf("failed to delete user: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return &AuthError{Code: "user_not_found", Message: "User not found"}
+	}
+	s.log.Info("user deleted by admin", zap.String("user_id", userID))
+	return nil
+}
+
+// AdminBanUser bans or unbans a user
+func (s *AuthService) AdminBanUser(ctx context.Context, userID string, banned bool) error {
+	result, err := s.db.Exec(ctx, "UPDATE auth.users SET is_banned = $1, updated_at = NOW() WHERE id = $2", banned, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update user ban status: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return &AuthError{Code: "user_not_found", Message: "User not found"}
+	}
+	action := "banned"
+	if !banned {
+		action = "unbanned"
+	}
+	s.log.Info("user "+action+" by admin", zap.String("user_id", userID))
+	return nil
+}
+
+// AdminUpdateUser updates user metadata
+func (s *AuthService) AdminUpdateUser(ctx context.Context, userID string, updates AdminUpdateRequest) (*models.User, error) {
+	var setClauses []string
+	var args []interface{}
+	argNum := 1
+
+	if updates.Role != "" {
+		setClauses = append(setClauses, fmt.Sprintf("role = $%d", argNum))
+		args = append(args, updates.Role)
+		argNum++
+	}
+	if updates.Email != "" {
+		setClauses = append(setClauses, fmt.Sprintf("email = $%d", argNum))
+		args = append(args, updates.Email)
+		argNum++
+	}
+
+	if len(setClauses) == 0 {
+		return s.GetUser(ctx, userID)
+	}
+
+	setClauses = append(setClauses, "updated_at = NOW()")
+	args = append(args, userID)
+
+	sql := fmt.Sprintf("UPDATE auth.users SET %s WHERE id = $%d", strings.Join(setClauses, ", "), argNum)
+	_, err := s.db.Exec(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update user: %w", err)
+	}
+
+	return s.GetUser(ctx, userID)
+}
+
+// AdminInviteUser creates a user and sends them an invite email
+func (s *AuthService) AdminInviteUser(ctx context.Context, email string) (*models.User, error) {
+	if email == "" {
+		return nil, &AuthError{Code: "email_required", Message: "Email is required"}
+	}
+
+	var exists bool
+	s.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM auth.users WHERE email = $1)", email).Scan(&exists)
+	if exists {
+		return nil, &AuthError{Code: "user_already_exists", Message: "A user with this email already exists"}
+	}
+
+	// Generate a random temporary password
+	tempPwd, _ := generateSecureToken(16)
+	passwordHash, err := hashPassword(tempPwd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	userID := uuid.New().String()
+	now := time.Now().UTC()
+
+	user := &models.User{
+		ID:           userID,
+		Email:        email,
+		PasswordHash: passwordHash,
+		Role:         "authenticated",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO auth.users (id, email, password_hash, role, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, user.ID, user.Email, user.PasswordHash, user.Role, user.CreatedAt, user.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create invited user: %w", err)
+	}
+
+	s.log.Info("user invited by admin", zap.String("user_id", user.ID), zap.String("email", email))
+	if link, linkErr := s.GenerateActionLink(ctx, ActionLinkInvite, user.ID, user.Email, s.cfg.SiteURL); linkErr == nil {
+		s.log.Info("invite link generated", zap.String("user_id", user.ID), zap.String("invite_url", link))
+	}
+	return user, nil
+}
+
+// AdminUpdateRequest for admin user updates
+type AdminUpdateRequest struct {
+	Email        string         `json:"email"`
+	Role         string         `json:"role"`
+	IsSuperAdmin *bool          `json:"is_super_admin,omitempty"`
+	UserMetadata map[string]any `json:"user_metadata,omitempty"`
+}
+
+type UpdateUserRequest struct {
+	Email        string         `json:"email,omitempty"`
+	Password     string         `json:"password,omitempty"`
+	UserMetadata map[string]any `json:"data,omitempty"`
+}
+
+func (s *AuthService) UpdateUser(ctx context.Context, userID string, updates UpdateUserRequest) (*models.User, error) {
+	var setClauses []string
+	var args []interface{}
+	argNum := 1
+
+	if updates.Email != "" {
+		setClauses = append(setClauses, fmt.Sprintf("email = $%d", argNum))
+		args = append(args, updates.Email)
+		argNum++
+	}
+	if updates.Password != "" {
+		if len(updates.Password) < 8 {
+			return nil, &AuthError{Code: "weak_password", Message: "Password must be at least 8 characters"}
+		}
+		passwordHash, err := hashPassword(updates.Password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to hash password: %w", err)
+		}
+		setClauses = append(setClauses, fmt.Sprintf("password_hash = $%d", argNum))
+		args = append(args, passwordHash)
+		argNum++
+	}
+	if updates.UserMetadata != nil {
+		setClauses = append(setClauses, fmt.Sprintf("raw_user_meta_data = $%d", argNum))
+		args = append(args, models.JSONB(updates.UserMetadata))
+		argNum++
+	}
+
+	if len(setClauses) == 0 {
+		return s.GetUser(ctx, userID)
+	}
+
+	setClauses = append(setClauses, "updated_at = NOW()")
+	args = append(args, userID)
+
+	sql := fmt.Sprintf("UPDATE auth.users SET %s WHERE id = $%d", strings.Join(setClauses, ", "), argNum)
+	result, err := s.db.Exec(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update user: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return nil, &AuthError{Code: "user_not_found", Message: "User not found"}
+	}
+
+	return s.GetUser(ctx, userID)
+}
+
+func (s *AuthService) IsAdmin(ctx context.Context, userID string) (bool, error) {
+	var isSuperAdmin bool
+	err := s.db.QueryRow(ctx, "SELECT is_super_admin FROM auth.users WHERE id = $1", userID).Scan(&isSuperAdmin)
+	if err != nil {
+		return false, err
+	}
+	return isSuperAdmin, nil
+}
+
+func (s *AuthService) CreateRecoveryToken(ctx context.Context, email, redirectTo string) error {
+	var user models.User
+	err := s.db.QueryRow(ctx, `
+		SELECT id, email, is_banned
+		FROM auth.users
+		WHERE email = $1
+	`, email).Scan(&user.ID, &user.Email, &user.IsBanned)
+	if err != nil || user.IsBanned {
+		return nil
+	}
+	if redirectTo == "" {
+		redirectTo = s.cfg.SiteURL + "/auth/reset-password"
+	}
+	token, err := generateSecureToken(32)
+	if err != nil {
+		return err
+	}
+	tokenHash := hashToken(token)
+	expiresAt := time.Now().UTC().Add(1 * time.Hour)
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO omnibase.auth_flow_tokens (token_hash, user_id, email, token_type, redirect_to, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, tokenHash, user.ID, user.Email, string(ActionLinkRecovery), redirectTo, expiresAt); err != nil {
+		return err
+	}
+	// Link goes directly to client with token so user can submit new password (token consumed on reset)
+	clientLink := redirectTo
+	if strings.Contains(redirectTo, "?") {
+		clientLink = redirectTo + "&token=" + token
+	} else {
+		clientLink = redirectTo + "?token=" + token
+	}
+	if s.mailer != nil {
+		return s.mailer.SendPasswordReset(user.Email, "", clientLink)
+	}
+	s.log.Info("password recovery link generated", zap.String("email", user.Email), zap.String("reset_url", clientLink))
+	return nil
+}
+
+// CreateMagicLink sends a passwordless sign-in link to the given email (if user exists).
+func (s *AuthService) CreateMagicLink(ctx context.Context, email, redirectTo string) error {
+	var user models.User
+	err := s.db.QueryRow(ctx, `
+		SELECT id, email, is_banned
+		FROM auth.users
+		WHERE email = $1
+	`, email).Scan(&user.ID, &user.Email, &user.IsBanned)
+	if err != nil || user.IsBanned {
+		return nil // Do not reveal whether user exists
+	}
+
+	link, err := s.GenerateActionLink(ctx, ActionLinkMagicLogin, user.ID, user.Email, redirectTo)
+	if err != nil {
+		return err
+	}
+
+	if s.mailer != nil {
+		return s.mailer.SendMagicLink(user.Email, link)
+	}
+	s.log.Info("magic link generated", zap.String("email", user.Email), zap.String("link", link))
+	return nil
+}
+
+// VerifyMagicLink consumes a magic_link token and returns the user for issuing a session.
+func (s *AuthService) VerifyMagicLink(ctx context.Context, token string) (*models.User, string, error) {
+	record, err := s.consumeFlowToken(ctx, token, ActionLinkMagicLogin)
+	if err != nil {
+		return nil, "", err
+	}
+	var user models.User
+	err = s.db.QueryRow(ctx, `
+		SELECT id, email, role, is_super_admin, is_banned, created_at, updated_at
+		FROM auth.users WHERE id = $1
+	`, record.UserID).Scan(&user.ID, &user.Email, &user.Role, &user.IsSuperAdmin, &user.IsBanned, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		return nil, "", err
+	}
+	if user.IsBanned {
+		return nil, "", &AuthError{Code: "user_banned", Message: "Account is suspended"}
+	}
+	return &user, record.RedirectTo, nil
+}
+
+func (s *AuthService) VerifyEmailToken(ctx context.Context, token string, tokenType ActionLinkType) (string, error) {
+	record, err := s.consumeFlowToken(ctx, token, tokenType)
+	if err != nil {
+		return "", err
+	}
+
+	if _, err := s.db.Exec(ctx, `
+		UPDATE auth.users
+		SET email_confirmed_at = COALESCE(email_confirmed_at, NOW()), updated_at = NOW()
+		WHERE id = $1
+	`, record.UserID); err != nil {
+		return "", err
+	}
+
+	return record.RedirectTo, nil
+}
+
+func (s *AuthService) ResetPassword(ctx context.Context, token, newPassword string) error {
+	if len(newPassword) < 8 {
+		return &AuthError{Code: "weak_password", Message: "Password must be at least 8 characters"}
+	}
+
+	record, err := s.consumeFlowToken(ctx, token, ActionLinkRecovery)
+	if err != nil {
+		return err
+	}
+
+	passwordHash, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
+	if _, err := s.db.Exec(ctx, `
+		UPDATE auth.users
+		SET password_hash = $1, updated_at = NOW()
+		WHERE id = $2
+	`, passwordHash, record.UserID); err != nil {
+		return err
+	}
+
+	return s.RevokeAllSessions(ctx, record.UserID)
+}
+
+func (s *AuthService) RevokeRefreshToken(ctx context.Context, refreshToken string) error {
+	return s.revokeRefreshToken(ctx, refreshToken)
+}
+
+func (s *AuthService) RevokeAllSessions(ctx context.Context, userID string) error {
+	_, err := s.db.Exec(ctx, "DELETE FROM auth.sessions WHERE user_id = $1", userID)
+	return err
+}
+
+func (s *AuthService) GenerateActionLink(ctx context.Context, tokenType ActionLinkType, userID, email, redirectTo string) (string, error) {
+	if redirectTo == "" {
+		redirectTo = s.cfg.SiteURL
+	}
+
+	token, err := generateSecureToken(32)
+	if err != nil {
+		return "", err
+	}
+
+	expiresAt := time.Now().UTC().Add(24 * time.Hour)
+	if tokenType == ActionLinkRecovery || tokenType == ActionLinkMagicLogin {
+		expiresAt = time.Now().UTC().Add(1 * time.Hour)
+	}
+
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO omnibase.auth_flow_tokens (token_hash, user_id, email, token_type, redirect_to, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, hashToken(token), userID, email, string(tokenType), redirectTo, expiresAt); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%s/auth/v1/verify?token=%s&type=%s&redirect_to=%s", s.cfg.APIExternalURL, token, tokenType, redirectTo), nil
+}
+
+func (s *AuthService) ListProviders() []OAuthProvider {
+	providers := []OAuthProvider{
+		{
+			Name:         "google",
+			Enabled:      s.cfg.GoogleClientID != "" && s.cfg.GoogleClientSecret != "",
+			ClientID:     s.cfg.GoogleClientID,
+			AuthorizeURL: fmt.Sprintf("%s/auth/v1/authorize?provider=google", s.cfg.APIExternalURL),
+		},
+		{
+			Name:         "github",
+			Enabled:      s.cfg.GitHubClientID != "" && s.cfg.GitHubClientSecret != "",
+			ClientID:     s.cfg.GitHubClientID,
+			AuthorizeURL: fmt.Sprintf("%s/auth/v1/authorize?provider=github", s.cfg.APIExternalURL),
+		},
+	}
+	return providers
+}
+
+func (s *AuthService) OAuthAuthorizeURL(ctx context.Context, provider, redirectTo string) (string, error) {
+	cfg, err := s.providerConfig(provider)
+	if err != nil {
+		return "", err
+	}
+
+	state, err := generateSecureToken(24)
+	if err != nil {
+		return "", err
+	}
+	if redirectTo == "" {
+		redirectTo = s.cfg.SiteURL
+	}
+
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO omnibase.oauth_states (state_hash, provider, redirect_to, expires_at)
+		VALUES ($1, $2, $3, $4)
+	`, hashToken(state), provider, redirectTo, time.Now().UTC().Add(10*time.Minute)); err != nil {
+		return "", err
+	}
+
+	values := url.Values{}
+	values.Set("client_id", cfg.ClientID)
+	values.Set("redirect_uri", s.oauthCallbackURL(provider))
+	values.Set("response_type", "code")
+	values.Set("state", state)
+	values.Set("scope", cfg.Scope)
+	if provider == "google" {
+		values.Set("access_type", "offline")
+		values.Set("prompt", "consent")
+	}
+
+	return cfg.AuthURL + "?" + values.Encode(), nil
+}
+
+func (s *AuthService) CompleteOAuth(ctx context.Context, provider, code, state string) (*SignUpResponse, string, error) {
+	stateRecord, err := s.consumeOAuthState(ctx, provider, state)
+	if err != nil {
+		return nil, "", err
+	}
+
+	cfg, err := s.providerConfig(provider)
+	if err != nil {
+		return nil, "", err
+	}
+
+	tokenResp, err := s.exchangeOAuthCode(ctx, cfg, provider, code)
+	if err != nil {
+		return nil, "", err
+	}
+
+	email, providerID, err := s.fetchOAuthIdentity(ctx, cfg, provider, tokenResp.AccessToken)
+	if err != nil {
+		return nil, "", err
+	}
+
+	user, err := s.findOrCreateOAuthUser(ctx, provider, providerID, email, tokenResp.AccessToken, tokenResp.RefreshToken, tokenResp.ExpiresIn)
+	if err != nil {
+		return nil, "", err
+	}
+
+	accessToken, refreshToken, err := s.issueTokenPair(ctx, user, "", "")
+	if err != nil {
+		return nil, "", err
+	}
+
+	return &SignUpResponse{
+		User:         user,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		TokenType:    "bearer",
+		ExpiresIn:    int(s.cfg.JWTAccessExpiry.Seconds()),
+	}, stateRecord.RedirectTo, nil
+}
+
+// IssueTokenPairForUser issues access and refresh tokens for a user (e.g. after magic link verify).
+func (s *AuthService) IssueTokenPairForUser(ctx context.Context, user *models.User) (*SignUpResponse, error) {
+	accessToken, refreshToken, err := s.issueTokenPair(ctx, user, "", "")
+	if err != nil {
+		return nil, err
+	}
+	return &SignUpResponse{
+		User:         user,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		TokenType:    "bearer",
+		ExpiresIn:    int(s.cfg.JWTAccessExpiry.Seconds()),
+	}, nil
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-func (s *AuthService) issueTokenPair(user *models.User) (accessToken, refreshToken string, err error) {
+func (s *AuthService) issueTokenPair(ctx context.Context, user *models.User, userAgent, ip string) (accessToken, refreshToken string, err error) {
 	accessToken, err = s.jwtManager.IssueAccessToken(user.ID, user.Email, user.Role, "")
 	if err != nil {
 		return "", "", fmt.Errorf("failed to issue access token: %w", err)
@@ -308,16 +808,22 @@ func (s *AuthService) issueTokenPair(user *models.User) (accessToken, refreshTok
 	if err != nil {
 		return "", "", fmt.Errorf("failed to issue refresh token: %w", err)
 	}
+	if err := s.persistSession(ctx, user.ID, refreshToken, userAgent, ip); err != nil {
+		return "", "", err
+	}
 	return accessToken, refreshToken, nil
 }
 
 func (s *AuthService) sendEmailConfirmation(user *models.User, opts *SignUpOptions) {
-	token, _ := generateSecureToken(32)
 	redirectTo := s.cfg.SiteURL
 	if opts != nil && opts.RedirectTo != "" {
 		redirectTo = opts.RedirectTo
 	}
-	confirmURL := fmt.Sprintf("%s/auth/v1/verify?token=%s&redirect_to=%s", s.cfg.APIExternalURL, token, redirectTo)
+	confirmURL, err := s.GenerateActionLink(context.Background(), ActionLinkSignup, user.ID, user.Email, redirectTo)
+	if err != nil {
+		s.log.Error("failed to generate confirmation link", zap.Error(err), zap.String("user_id", user.ID))
+		return
+	}
 
 	if s.mailer != nil {
 		if err := s.mailer.SendConfirmation(user.Email, "", confirmURL); err != nil {
@@ -329,6 +835,7 @@ func (s *AuthService) sendEmailConfirmation(user *models.User, opts *SignUpOptio
 }
 
 // hashPassword uses Argon2id (winner of the Password Hashing Competition)
+// Format: $argon2id$v=19$m=65536,t=1,p=4$<salt_hex>$<hash_hex>
 func hashPassword(password string) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
@@ -339,11 +846,40 @@ func hashPassword(password string) (string, error) {
 }
 
 // verifyPassword checks an Argon2id hash
-func verifyPassword(password, hash string) bool {
-	// Simple comparison — production implementation should parse the hash params
-	// For Phase 1 we use a simplified approach
-	// TODO: Parse actual Argon2id params from hash string
-	return errors.Is(nil, nil) // Placeholder — real impl parses hash
+// Format: $argon2id$v=19$m=65536,t=1,p=4$<salt_hex>$<hash_hex>
+func verifyPassword(password, encodedHash string) bool {
+	parts := strings.Split(encodedHash, "$")
+	// Expected: ["", "argon2id", "v=19", "m=65536,t=1,p=4", "<salt_hex>", "<hash_hex>"]
+	if len(parts) != 6 || parts[1] != "argon2id" {
+		return false
+	}
+
+	saltBytes, err := hex.DecodeString(parts[4])
+	if err != nil {
+		return false
+	}
+	expectedHashBytes, err := hex.DecodeString(parts[5])
+	if err != nil {
+		return false
+	}
+
+	// Re-hash with same parameters
+	computedHash := argon2.IDKey([]byte(password), saltBytes, 1, 64*1024, 4, 32)
+
+	// Constant-time comparison
+	return errors.Is(nil, nil) && safeCompare(computedHash, expectedHashBytes)
+}
+
+// safeCompare performs a constant-time byte slice comparison
+func safeCompare(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var result byte
+	for i := range a {
+		result |= a[i] ^ b[i]
+	}
+	return result == 0
 }
 
 func generateSecureToken(n int) (string, error) {
@@ -352,6 +888,383 @@ func generateSecureToken(n int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+type flowTokenRecord struct {
+	UserID     string
+	RedirectTo string
+}
+
+type OAuthProvider struct {
+	Name         string `json:"name"`
+	Enabled      bool   `json:"enabled"`
+	ClientID     string `json:"client_id,omitempty"`
+	AuthorizeURL string `json:"authorize_url,omitempty"`
+}
+
+type oauthStateRecord struct {
+	Provider   string
+	RedirectTo string
+}
+
+type oauthProviderConfig struct {
+	ClientID     string
+	ClientSecret string
+	AuthURL      string
+	TokenURL     string
+	UserURL      string
+	Scope        string
+}
+
+type oauthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	Scope        string `json:"scope"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+func (s *AuthService) ensureSystemTables(ctx context.Context) error {
+	_, err := s.db.Exec(ctx, `
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth') THEN
+				EXECUTE 'CREATE SCHEMA auth';
+			END IF;
+			IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'omnibase') THEN
+				EXECUTE 'CREATE SCHEMA omnibase';
+			END IF;
+		END
+		$$;
+		CREATE TABLE IF NOT EXISTS auth.users (
+			id UUID PRIMARY KEY,
+			email TEXT UNIQUE,
+			phone TEXT UNIQUE,
+			password_hash TEXT,
+			role TEXT NOT NULL DEFAULT 'authenticated',
+			raw_user_meta_data JSONB DEFAULT '{}'::jsonb,
+			raw_app_meta_data JSONB DEFAULT '{}'::jsonb,
+			is_super_admin BOOLEAN DEFAULT FALSE,
+			is_banned BOOLEAN DEFAULT FALSE,
+			email_confirmed_at TIMESTAMPTZ,
+			phone_confirmed_at TIMESTAMPTZ,
+			last_sign_in_at TIMESTAMPTZ,
+			banned_until TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE TABLE IF NOT EXISTS auth.sessions (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+			refresh_token TEXT NOT NULL UNIQUE,
+			user_agent TEXT,
+			ip INET,
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE TABLE IF NOT EXISTS auth.oauth_accounts (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+			provider TEXT NOT NULL,
+			provider_id TEXT NOT NULL,
+			access_token TEXT,
+			refresh_token TEXT,
+			expires_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE(provider, provider_id)
+		);
+		CREATE INDEX IF NOT EXISTS auth_users_email_idx ON auth.users(email);
+		CREATE INDEX IF NOT EXISTS auth_users_created_at_idx ON auth.users(created_at DESC);
+		CREATE INDEX IF NOT EXISTS auth_sessions_user_id_idx ON auth.sessions(user_id);
+		CREATE INDEX IF NOT EXISTS auth_sessions_refresh_token_idx ON auth.sessions(refresh_token);
+		CREATE TABLE IF NOT EXISTS omnibase.auth_flow_tokens (
+			token_hash TEXT PRIMARY KEY,
+			user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+			email TEXT,
+			token_type TEXT NOT NULL,
+			redirect_to TEXT,
+			expires_at TIMESTAMPTZ NOT NULL,
+			consumed_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS auth_flow_tokens_user_id_idx ON omnibase.auth_flow_tokens(user_id);
+		CREATE INDEX IF NOT EXISTS auth_flow_tokens_type_idx ON omnibase.auth_flow_tokens(token_type);
+		CREATE TABLE IF NOT EXISTS omnibase.oauth_states (
+			state_hash TEXT PRIMARY KEY,
+			provider TEXT NOT NULL,
+			redirect_to TEXT,
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS oauth_states_provider_idx ON omnibase.oauth_states(provider);
+	`)
+	return err
+}
+
+func (s *AuthService) persistSession(ctx context.Context, userID, refreshToken, userAgent, ip string) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO auth.sessions (user_id, refresh_token, user_agent, ip, expires_at)
+		VALUES ($1, $2, $3, NULLIF($4, '')::inet, $5)
+	`, userID, refreshToken, userAgent, ip, time.Now().UTC().Add(s.cfg.JWTRefreshExpiry))
+	return err
+}
+
+func (s *AuthService) revokeRefreshToken(ctx context.Context, refreshToken string) error {
+	_, err := s.db.Exec(ctx, "DELETE FROM auth.sessions WHERE refresh_token = $1", refreshToken)
+	return err
+}
+
+func (s *AuthService) consumeFlowToken(ctx context.Context, token string, tokenType ActionLinkType) (*flowTokenRecord, error) {
+	var record flowTokenRecord
+	err := s.db.QueryRow(ctx, `
+		UPDATE omnibase.auth_flow_tokens
+		SET consumed_at = NOW()
+		WHERE token_hash = $1
+		  AND token_type = $2
+		  AND consumed_at IS NULL
+		  AND expires_at > NOW()
+		RETURNING user_id::text, COALESCE(redirect_to, '')
+	`, hashToken(token), string(tokenType)).Scan(&record.UserID, &record.RedirectTo)
+	if err != nil {
+		return nil, &AuthError{Code: "invalid_token", Message: "Invalid or expired token"}
+	}
+	return &record, nil
+}
+
+func (s *AuthService) consumeOAuthState(ctx context.Context, provider, state string) (*oauthStateRecord, error) {
+	var record oauthStateRecord
+	err := s.db.QueryRow(ctx, `
+		DELETE FROM omnibase.oauth_states
+		WHERE state_hash = $1
+		  AND provider = $2
+		  AND expires_at > NOW()
+		RETURNING provider, COALESCE(redirect_to, '')
+	`, hashToken(state), provider).Scan(&record.Provider, &record.RedirectTo)
+	if err != nil {
+		return nil, &AuthError{Code: "invalid_oauth_state", Message: "Invalid or expired OAuth state"}
+	}
+	return &record, nil
+}
+
+func (s *AuthService) providerConfig(provider string) (*oauthProviderConfig, error) {
+	switch provider {
+	case "google":
+		if s.cfg.GoogleClientID == "" || s.cfg.GoogleClientSecret == "" {
+			return nil, &AuthError{Code: "provider_not_configured", Message: "Google OAuth is not configured"}
+		}
+		return &oauthProviderConfig{
+			ClientID:     s.cfg.GoogleClientID,
+			ClientSecret: s.cfg.GoogleClientSecret,
+			AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL:     "https://oauth2.googleapis.com/token",
+			UserURL:      "https://openidconnect.googleapis.com/v1/userinfo",
+			Scope:        "openid email profile",
+		}, nil
+	case "github":
+		if s.cfg.GitHubClientID == "" || s.cfg.GitHubClientSecret == "" {
+			return nil, &AuthError{Code: "provider_not_configured", Message: "GitHub OAuth is not configured"}
+		}
+		return &oauthProviderConfig{
+			ClientID:     s.cfg.GitHubClientID,
+			ClientSecret: s.cfg.GitHubClientSecret,
+			AuthURL:      "https://github.com/login/oauth/authorize",
+			TokenURL:     "https://github.com/login/oauth/access_token",
+			UserURL:      "https://api.github.com/user",
+			Scope:        "read:user user:email",
+		}, nil
+	default:
+		return nil, &AuthError{Code: "unsupported_provider", Message: "Unsupported OAuth provider"}
+	}
+}
+
+func (s *AuthService) oauthCallbackURL(provider string) string {
+	return fmt.Sprintf("%s/auth/v1/callback?provider=%s", s.cfg.APIExternalURL, provider)
+}
+
+func (s *AuthService) exchangeOAuthCode(ctx context.Context, cfg *oauthProviderConfig, provider, code string) (*oauthTokenResponse, error) {
+	form := url.Values{}
+	form.Set("client_id", cfg.ClientID)
+	form.Set("client_secret", cfg.ClientSecret)
+	form.Set("code", code)
+	form.Set("redirect_uri", s.oauthCallbackURL(provider))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		return nil, &AuthError{Code: "oauth_exchange_failed", Message: string(body)}
+	}
+
+	var tokenResp oauthTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, err
+	}
+	if tokenResp.AccessToken == "" {
+		return nil, &AuthError{Code: "oauth_exchange_failed", Message: "OAuth provider did not return an access token"}
+	}
+	return &tokenResp, nil
+}
+
+func (s *AuthService) fetchOAuthIdentity(ctx context.Context, cfg *oauthProviderConfig, provider, accessToken string) (email, providerID string, err error) {
+	switch provider {
+	case "google":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var payload struct {
+			Sub           string `json:"sub"`
+			Email         string `json:"email"`
+			EmailVerified bool   `json:"email_verified"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			return "", "", err
+		}
+		if payload.Email == "" || !payload.EmailVerified {
+			return "", "", &AuthError{Code: "oauth_identity_invalid", Message: "Google account does not have a verified email"}
+		}
+		return payload.Email, payload.Sub, nil
+	case "github":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var user struct {
+			ID    int64  `json:"id"`
+			Email string `json:"email"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+			return "", "", err
+		}
+		email = user.Email
+		if email == "" {
+			email, err = s.fetchGitHubPrimaryEmail(ctx, accessToken)
+			if err != nil {
+				return "", "", err
+			}
+		}
+		if email == "" {
+			return "", "", &AuthError{Code: "oauth_identity_invalid", Message: "GitHub account does not expose a verified email"}
+		}
+		return email, fmt.Sprintf("%d", user.ID), nil
+	default:
+		return "", "", &AuthError{Code: "unsupported_provider", Message: "Unsupported OAuth provider"}
+	}
+}
+
+func (s *AuthService) fetchGitHubPrimaryEmail(ctx context.Context, accessToken string) (string, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user/emails", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&emails); err != nil {
+		return "", err
+	}
+	for _, item := range emails {
+		if item.Primary && item.Verified {
+			return item.Email, nil
+		}
+	}
+	for _, item := range emails {
+		if item.Verified {
+			return item.Email, nil
+		}
+	}
+	return "", nil
+}
+
+func (s *AuthService) findOrCreateOAuthUser(ctx context.Context, provider, providerID, email, accessToken, refreshToken string, expiresIn int) (*models.User, error) {
+	var userID string
+	err := s.db.QueryRow(ctx, `
+		SELECT user_id::text
+		FROM auth.oauth_accounts
+		WHERE provider = $1 AND provider_id = $2
+	`, provider, providerID).Scan(&userID)
+	if err == nil {
+		user, getErr := s.GetUser(ctx, userID)
+		if getErr != nil {
+			return nil, getErr
+		}
+		_, _ = s.db.Exec(ctx, `
+			UPDATE auth.oauth_accounts
+			SET access_token = $1, refresh_token = $2, expires_at = $3
+			WHERE provider = $4 AND provider_id = $5
+		`, accessToken, refreshToken, nullableExpiry(expiresIn), provider, providerID)
+		return user, nil
+	}
+
+	var existingUserID string
+	err = s.db.QueryRow(ctx, `SELECT id::text FROM auth.users WHERE email = $1`, email).Scan(&existingUserID)
+	if err != nil {
+		now := time.Now().UTC()
+		existingUserID = uuid.New().String()
+		_, err = s.db.Exec(ctx, `
+			INSERT INTO auth.users (id, email, role, email_confirmed_at, created_at, updated_at)
+			VALUES ($1, $2, 'authenticated', $3, $4, $5)
+		`, existingUserID, email, now, now, now)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO auth.oauth_accounts (user_id, provider, provider_id, access_token, refresh_token, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (provider, provider_id)
+		DO UPDATE SET
+			user_id = EXCLUDED.user_id,
+			access_token = EXCLUDED.access_token,
+			refresh_token = EXCLUDED.refresh_token,
+			expires_at = EXCLUDED.expires_at
+	`, existingUserID, provider, providerID, accessToken, refreshToken, nullableExpiry(expiresIn))
+	if err != nil {
+		return nil, err
+	}
+
+	return s.GetUser(ctx, existingUserID)
+}
+
+func nullableExpiry(expiresIn int) interface{} {
+	if expiresIn <= 0 {
+		return nil
+	}
+	return time.Now().UTC().Add(time.Duration(expiresIn) * time.Second)
 }
 
 // AuthError is the standard error type for auth operations

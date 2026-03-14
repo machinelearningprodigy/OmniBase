@@ -11,10 +11,10 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/machinelearningprodigy/OmniBase/shared/config"
-	"github.com/machinelearningprodigy/OmniBase/shared/logger"
 	"github.com/machinelearningprodigy/OmniBase/auth/internal/handlers"
 	"github.com/machinelearningprodigy/OmniBase/auth/internal/services"
+	"github.com/machinelearningprodigy/OmniBase/shared/config"
+	"github.com/machinelearningprodigy/OmniBase/shared/logger"
 	"go.uber.org/zap"
 )
 
@@ -59,24 +59,29 @@ func main() {
 
 	// ─── Public Routes ────────────────────────────────────────────────────────
 	v1.Post("/signup", h.SignUp)
-	v1.Post("/token", h.SignIn)              // grant_type=password or refresh_token
+	v1.Post("/token", h.SignIn) // grant_type=password or refresh_token
 	v1.Post("/logout", h.SignOut)
-	v1.Post("/recover", h.RecoverPassword)   // Send password reset email
-	v1.Get("/verify", h.VerifyEmail)         // Email verification link
-	v1.Put("/user", h.UpdateUser)            // Update current user
-	v1.Get("/user", h.GetUser)               // Get current user
+	v1.Post("/recover", h.RecoverPassword) // Send password reset email
+	v1.Post("/magiclink", h.MagicLink)     // Passwordless sign-in: send magic link email
+	v1.Post("/reset-password", h.ResetPassword)
+	v1.Get("/verify", h.VerifyEmail) // Email verification + magic link verify
+	v1.Get("/providers", h.ListProviders)
+	v1.Put("/user", h.UpdateUser) // Update current user
+	v1.Get("/user", h.GetUser)    // Get current user
 
 	// ─── OAuth2 Routes ────────────────────────────────────────────────────────
-	v1.Get("/authorize", h.OAuthAuthorize)   // Redirect to provider
-	v1.Get("/callback", h.OAuthCallback)     // Handle provider callback
+	v1.Get("/authorize", h.OAuthAuthorize) // Redirect to provider
+	v1.Get("/callback", h.OAuthCallback)   // Handle provider callback
 
 	// ─── Admin Routes (service role only) ─────────────────────────────────────
 	admin := v1.Group("/admin")
+	admin.Use(h.RequireAdmin)
 	admin.Get("/users", h.AdminListUsers)
 	admin.Get("/users/:id", h.AdminGetUser)
 	admin.Put("/users/:id", h.AdminUpdateUser)
 	admin.Delete("/users/:id", h.AdminDeleteUser)
 	admin.Post("/users/:id/ban", h.AdminBanUser)
+	admin.Post("/invite", h.AdminInviteUser)
 	admin.Post("/generate-link", h.AdminGenerateLink)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.AuthPort)

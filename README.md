@@ -25,6 +25,9 @@ OmniBase is a next-generation, 100% open-source Backend-as-a-Service (BaaS) plat
 | **Single Binary Mode (like PocketBase)** | 🔜 Phase 6 | PocketBase only |
 | **100% Open Source, Apache 2.0** | ✅ | Supabase: mixed |
 
+**New here?** → [**GETTING_STARTED.md**](GETTING_STARTED.md) — full self-host guide (Supabase/Firebase/Appwrite-style).  
+**What's built?** → [**docs/FEATURES.md**](docs/FEATURES.md) — feature status and parity table.
+
 ---
 
 ## 🚀 Quick Start (5 minutes)

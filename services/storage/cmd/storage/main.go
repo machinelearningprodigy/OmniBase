@@ -77,6 +77,8 @@ func main() {
 	api.Post("/object/:bucket/*", storageHandler.RequireAuth, storageHandler.UploadObject)
 	api.Put("/object/:bucket/*", storageHandler.RequireAuth, storageHandler.UploadObject)
 	api.Delete("/object/:bucket", storageHandler.RequireAuth, storageHandler.DeleteObjects)
+	// List objects in a bucket (POST with optional prefix)
+	api.Post("/object/list/:bucket", storageHandler.RequireAuth, storageHandler.ListObjects)
 	api.Get("/object/public/:bucket/*", storageHandler.GetPublicObject)
 	
 	// Pre-signed URLs for private access

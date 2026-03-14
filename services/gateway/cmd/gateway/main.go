@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +18,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/machinelearningprodigy/OmniBase/shared/config"
 	"github.com/machinelearningprodigy/OmniBase/shared/logger"
+	"github.com/machinelearningprodigy/OmniBase/gateway/internal/apilogs"
 	"github.com/machinelearningprodigy/OmniBase/gateway/internal/router"
 	"go.uber.org/zap"
 )
@@ -62,7 +65,7 @@ func main() {
 	app.Use(compress.New(compress.Config{Level: compress.LevelBestSpeed}))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "*", // Configured per-project in Phase 6
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-OmniBase-Key",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-OmniBase-Key, Accept-Profile, Content-Profile, Prefer",
 		AllowMethods:     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 		AllowCredentials: false,
 	}))
@@ -95,15 +98,26 @@ func main() {
 
 		start := time.Now()
 		err := c.Next()
+		latency := time.Since(start)
 
 		log.Info("request",
 			zap.String("method", c.Method()),
 			zap.String("path", c.Path()),
 			zap.Int("status", c.Response().StatusCode()),
-			zap.Duration("latency", time.Since(start)),
+			zap.Duration("latency", latency),
 			zap.String("ip", c.IP()),
 			zap.String("trace_id", traceID),
 		)
+
+		apilogs.AddEntry(apilogs.APILogEntry{
+			ID:        traceID,
+			Method:    c.Method(),
+			Path:      c.Path(),
+			Status:    c.Response().StatusCode(),
+			LatencyMs: float64(latency.Microseconds()) / 1000.0,
+			IP:        c.IP(),
+			Timestamp: start,
+		})
 
 		return err
 	})
@@ -112,6 +126,24 @@ func main() {
 	router.Register(app, cfg, log)
 
 	// ─── Health Check ──────────────────────────────────────────────────────────
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"name":        "OmniBase API Gateway",
+			"status":      "ok",
+			"dashboard":   "http://localhost:3001",
+			"health":      "/health",
+			"ready":       "/ready",
+			"auth":        "/auth/v1",
+			"rest":        "/rest/v1",
+			"graphql":     "/graphql/v1",
+			"storage":     "/storage/v1",
+			"realtime":    "/realtime/v1/websocket",
+			"functions":   "/functions/v1",
+			"admin":       "/admin/v1",
+			"description": "Use the dashboard on port 3001 or call these APIs directly from your app.",
+		})
+	})
+
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status":  "ok",
@@ -121,7 +153,18 @@ func main() {
 	})
 
 	app.Get("/ready", func(c *fiber.Ctx) error {
-		// TODO: Phase 2 — check downstream service health
+		// Optional: ping downstream services for readiness (e.g. auth, postgrest)
+		ctx, cancel := context.WithTimeout(c.Context(), 2*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.AuthServiceURL+"/health", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "not_ready", "reason": "auth_unavailable"})
+		}
+		resp.Body.Close()
 		return c.JSON(fiber.Map{"status": "ready"})
 	})
 

@@ -122,6 +122,65 @@ func (s *StorageService) DeleteObjects(ctx context.Context, userID, bucketID str
 	return nil
 }
 
+// StorageObjectMeta is the metadata record for a file in a bucket
+type StorageObjectMeta struct {
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	BucketID  string            `json:"bucket_id"`
+	Owner     string            `json:"owner"`
+	CreatedAt string            `json:"created_at"`
+	UpdatedAt string            `json:"updated_at"`
+	Metadata  map[string]interface{} `json:"metadata"`
+}
+
+// ListObjects returns objects in a bucket matching the given prefix
+func (s *StorageService) ListObjects(ctx context.Context, bucketID, prefix string, limit int) ([]StorageObjectMeta, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	query := `
+		SELECT id::text, name, bucket_id, COALESCE(owner, ''), 
+			created_at::text, updated_at::text,
+			content_type, size
+		FROM storage.objects
+		WHERE bucket_id = $1
+	`
+	args := []interface{}{bucketID}
+
+	if prefix != "" {
+		query += " AND name LIKE $2"
+		args = append(args, prefix+"%")
+	}
+
+	query += fmt.Sprintf(" ORDER BY name LIMIT %d", limit)
+
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var objects []StorageObjectMeta
+	for rows.Next() {
+		var obj StorageObjectMeta
+		var contentType string
+		var size int64
+		if err := rows.Scan(&obj.ID, &obj.Name, &obj.BucketID, &obj.Owner,
+			&obj.CreatedAt, &obj.UpdatedAt, &contentType, &size); err != nil {
+			continue
+		}
+		obj.Metadata = map[string]interface{}{
+			"mimetype":      contentType,
+			"size":          size,
+			"contentLength": size,
+		}
+		objects = append(objects, obj)
+	}
+
+	return objects, nil
+}
+
 func (s *StorageService) GetPublicObject(ctx context.Context, bucketID, path string) (io.ReadCloser, int64, string, error) {
 	// Check if bucket is public
 	var public bool

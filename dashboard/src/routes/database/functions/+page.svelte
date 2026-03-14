@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { getHeaders, getOmniBaseUrl } from '$lib/api'
 
   interface DBFunction {
     name: string
@@ -15,22 +16,11 @@
   let currentSchema = $state('public')
   let selectedFn = $state<DBFunction | null>(null)
 
-  const OMNIBASE_URL = 'http://localhost:8000'
-
-  function getHeaders() {
-    const session = typeof localStorage !== 'undefined' ? localStorage.getItem('omnibase.session') : null
-    const token = session ? JSON.parse(session).access_token : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    }
-  }
-
   async function loadFunctions() {
     try {
       loading = true
       error = null
-      const resp = await fetch(`${OMNIBASE_URL}/pg/functions?schema=${currentSchema}`, {
+      const resp = await fetch(`${getOmniBaseUrl()}/pg/functions?schema=${currentSchema}`, {
         headers: getHeaders()
       })
       if (resp.ok) {

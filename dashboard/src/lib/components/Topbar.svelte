@@ -1,26 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { authStore } from '$lib/stores/auth'
+  import { apiFetch, getHeaders, getOmniBaseUrl } from '$lib/api'
 
   let schemas = $state<string[]>([])
   let currentSchema = $state('public')
   let loading = $state(false)
-
-  const OMNIBASE_URL = 'http://localhost:8000'
-
-  function getHeaders() {
-    const session = typeof localStorage !== 'undefined' ? localStorage.getItem('omnibase.session') : null
-    const token = session ? JSON.parse(session).access_token : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    }
-  }
+  let showUserMenu = $state(false)
 
   async function loadSchemas() {
     try {
       loading = true
-      const resp = await fetch(`${OMNIBASE_URL}/pg/schemas`, { headers: getHeaders() })
+      const resp = await apiFetch(`${getOmniBaseUrl()}/pg/schemas`, { headers: getHeaders() })
       if (resp.ok) {
         schemas = await resp.json()
       }
@@ -36,9 +27,18 @@
     window.dispatchEvent(new CustomEvent('omnibase:schema-change', { detail: name }))
   }
 
+  function handleWindowClick(event: MouseEvent) {
+    const target = event.target as HTMLElement | null
+    if (!target?.closest('[data-user-menu]')) {
+      showUserMenu = false
+    }
+  }
+
   onMount(() => {
     loadSchemas()
     currentSchema = localStorage.getItem('omnibase.current_schema') || 'public'
+    window.addEventListener('click', handleWindowClick)
+    return () => window.removeEventListener('click', handleWindowClick)
   })
 </script>
 
@@ -84,8 +84,104 @@
       Docs
     </a>
 
-    <div style="width: 30px; height: 30px; border-radius: 50%; background: var(--gradient-brand); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; cursor: pointer;" data-tooltip="admin@omnibase.dev">
-      {$authStore.user?.email?.[0].toUpperCase() || 'A'}
-    </div>
+    {#if $authStore.user}
+      <div class="user-menu" data-user-menu>
+        <button
+          class="user-menu-trigger"
+          type="button"
+          title={$authStore.user.email}
+          onclick={() => showUserMenu = !showUserMenu}
+        >
+          <div class="user-avatar">
+            {$authStore.user.email?.[0].toUpperCase() || 'A'}
+          </div>
+        </button>
+
+        {#if showUserMenu}
+          <div class="user-menu-popover">
+            <div class="user-menu-email">{$authStore.user.email}</div>
+            <a href="/settings" class="user-menu-item" onclick={() => showUserMenu = false}>Settings</a>
+            <button
+              class="user-menu-item"
+              type="button"
+              onclick={() => {
+                showUserMenu = false
+                authStore.signOut()
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        {/if}
+      </div>
+    {:else}
+      <a href="/auth/login" class="btn btn-primary btn-sm" style="text-decoration: none;">Sign in</a>
+    {/if}
   </div>
 </header>
+
+<style>
+  .user-menu {
+    position: relative;
+  }
+
+  .user-menu-trigger {
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .user-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--gradient-brand);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .user-menu-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 200px;
+    padding: 8px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-lg);
+    z-index: 50;
+  }
+
+  .user-menu-email {
+    padding: 8px 10px 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 6px;
+    word-break: break-word;
+  }
+
+  .user-menu-item {
+    width: 100%;
+    display: block;
+    padding: 10px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .user-menu-item:hover {
+    background: var(--bg-elevated);
+  }
+</style>

@@ -1,11 +1,49 @@
 <script lang="ts">
-  let url = 'http://localhost:8000'
-  let anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiJ9...'
-  let serviceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0...'
-  
+  import { onMount } from 'svelte'
+  import { getHeaders, getOmniBaseUrl } from '$lib/api'
+  import { authStore } from '$lib/stores/auth'
+
+  let url = $state(getOmniBaseUrl())
+  let anonKey = $state('')
+  let serviceKey = $state('')
+  let loading = $state(true)
+  let error = $state<string | null>(null)
+  let apiUrlInput = $state('')
+
   function copy(text: string) {
     navigator.clipboard.writeText(text)
   }
+
+  function saveApiUrl() {
+    const u = apiUrlInput.trim() || url
+    if (u) {
+      if (typeof localStorage !== 'undefined') localStorage.setItem('omnibase.api_url', u)
+      url = u
+      window.location.reload()
+    }
+  }
+
+  async function loadConfig() {
+    try {
+      loading = true
+      apiUrlInput = getOmniBaseUrl()
+      if ($authStore.user) {
+        const resp = await fetch(`${getOmniBaseUrl()}/admin/v1/config`, { headers: getHeaders() })
+        const data = await resp.json()
+        if (!resp.ok) throw new Error(data.message || 'Failed to load project configuration')
+        url = data.url ?? url
+        anonKey = data.anonKey ?? ''
+        serviceKey = data.serviceKey ?? ''
+      }
+      error = null
+    } catch (err: any) {
+      error = err.message || 'Failed to load project configuration'
+    } finally {
+      loading = false
+    }
+  }
+
+  onMount(loadConfig)
 </script>
 
 <svelte:head>
@@ -20,18 +58,30 @@
 </div>
 
 <div class="page-content" style="max-width: 800px;">
+  {#if error}
+    <div class="card" style="margin-bottom: 24px; border-color: var(--status-error); color: var(--status-error);">
+      {error}
+    </div>
+  {/if}
+
   <div class="card" style="margin-bottom: 24px;">
     <h2 style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">Project URL</h2>
-    <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">This is your RESTful endpoint for querying and managing your database.</p>
-    
-    <div style="display: flex; gap: 8px;">
-      <input type="text" class="input" value={url} readonly style="flex: 1; font-family: var(--font-mono); color: var(--text-primary);" />
-      <button class="btn btn-secondary" onclick={() => copy(url)}>Copy</button>
+    <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">OmniBase API gateway URL. Change this if you are connecting to a different instance.</p>
+    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+      <input type="text" class="input" bind:value={apiUrlInput} placeholder="http://localhost:8000" style="flex: 1; font-family: var(--font-mono);" />
+      <button class="btn btn-primary" onclick={saveApiUrl} type="button">Save</button>
+      <button class="btn btn-secondary" onclick={() => copy(url)} disabled={!url}>Copy</button>
     </div>
+    <p style="font-size: 12px; color: var(--text-muted);">Current: <code style="font-family: var(--font-mono);">{url}</code></p>
   </div>
 
   <div class="card">
     <h2 style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">Project API Keys</h2>
+    {#if !$authStore.user}
+      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+        <a href="/auth/login">Sign in</a> to view and copy your anon and service role keys.
+      </p>
+    {:else}
     <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 24px;">
       Your API keys allow you to authenticate with the OmniBase backend from your client apps or server.
     </p>
@@ -46,8 +96,8 @@
         This key is safe to use in a browser if you have enabled Row Level Security (RLS) for your tables and configured policies.
       </p>
       <div style="display: flex; gap: 8px;">
-        <input type="password" class="input" value={anonKey} readonly style="flex: 1; font-family: var(--font-mono);" />
-        <button class="btn btn-secondary" onclick={() => copy(anonKey)}>Copy</button>
+        <input type="password" class="input" value={loading ? 'Loading...' : anonKey} readonly style="flex: 1; font-family: var(--font-mono);" />
+        <button class="btn btn-secondary" onclick={() => copy(anonKey)} disabled={loading || !anonKey}>Copy</button>
       </div>
     </div>
 
@@ -63,9 +113,10 @@
         This key has the ability to bypass Row Level Security. <strong>Never</strong> share it publicly or use it in the browser.
       </p>
       <div style="display: flex; gap: 8px;">
-        <input type="password" class="input" value={serviceKey} readonly style="flex: 1; font-family: var(--font-mono);" />
-        <button class="btn btn-secondary" onclick={() => copy(serviceKey)}>Copy</button>
+        <input type="password" class="input" value={loading ? 'Loading...' : serviceKey} readonly style="flex: 1; font-family: var(--font-mono);" />
+        <button class="btn btn-secondary" onclick={() => copy(serviceKey)} disabled={loading || !serviceKey}>Copy</button>
       </div>
     </div>
+    {/if}
   </div>
 </div>
