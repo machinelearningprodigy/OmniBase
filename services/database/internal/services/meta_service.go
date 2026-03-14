@@ -63,6 +63,7 @@ type FunctionMeta struct {
 	Schema     string `json:"schema"`
 	ReturnType string `json:"return_type"`
 	Language   string `json:"language"`
+	Arguments  string `json:"arguments"`
 	Definition string `json:"definition"`
 }
 
@@ -414,6 +415,7 @@ func (s *MetaService) GetFunctions(ctx context.Context, schema string) ([]Functi
 			n.nspname as schema,
 			pg_get_function_result(p.oid) as return_type,
 			l.lanname as language,
+			pg_get_function_arguments(p.oid) as arguments,
 			pg_get_functiondef(p.oid) as definition
 		FROM pg_proc p
 		JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -430,7 +432,7 @@ func (s *MetaService) GetFunctions(ctx context.Context, schema string) ([]Functi
 	var fns []FunctionMeta
 	for rows.Next() {
 		var f FunctionMeta
-		if err := rows.Scan(&f.Name, &f.Schema, &f.ReturnType, &f.Language, &f.Definition); err != nil {
+		if err := rows.Scan(&f.Name, &f.Schema, &f.ReturnType, &f.Language, &f.Arguments, &f.Definition); err != nil {
 			return nil, err
 		}
 		fns = append(fns, f)
@@ -636,4 +638,83 @@ func isSchemaMutation(sql string) bool {
 		}
 	}
 	return false
+}
+func (s *MetaService) GetTableDDL(ctx context.Context, schema, table string) (string, error) {
+	// Simple DDL generation logic
+	// In a real production app, this would be more complex (handling indexes, triggers, etc.)
+	// For now, we'll reconstruct the basic CREATE TABLE statement from columns
+	columns, err := s.GetTableColumns(ctx, schema, table)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("-- Schema Blueprint for %s.%s\n", schema, table))
+	sb.WriteString(fmt.Sprintf("CREATE TABLE %s.%s (\n", schema, table))
+
+	for i, col := range columns {
+		sb.WriteString(fmt.Sprintf("  %s %s", col.Name, col.Type))
+		if !col.IsNullable {
+			sb.WriteString(" NOT NULL")
+		}
+		if col.Default != "" {
+			sb.WriteString(fmt.Sprintf(" DEFAULT %s", col.Default))
+		}
+		if i < len(columns)-1 {
+			sb.WriteString(",")
+		}
+		sb.WriteString("\n")
+	}
+
+	// Add Primary Key if it exists
+	pkQuery := `
+		SELECT
+			a.attname
+		FROM pg_index i
+		JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+		WHERE i.indrelid = $1::regclass
+		AND i.indisprimary;
+	`
+	rows, err := s.db.Query(ctx, pkQuery, fmt.Sprintf("%s.%s", schema, table))
+	if err == nil {
+		var pkCols []string
+		for rows.Next() {
+			var colName string
+			if err := rows.Scan(&colName); err == nil {
+				pkCols = append(pkCols, colName)
+			}
+		}
+		rows.Close()
+		if len(pkCols) > 0 {
+			sb.WriteString(fmt.Sprintf("\n  , CONSTRAINT %s_pkey PRIMARY KEY (%s)\n", table, strings.Join(pkCols, ", ")))
+		}
+	}
+
+	sb.WriteString(");")
+	return sb.String(), nil
+}
+
+type TableStats struct {
+	RowCount    int64  `json:"row_count"`
+	TableSize   string `json:"table_size"`
+	IndexSize   string `json:"index_size"`
+	TotalSize   string `json:"total_size"`
+	Description string `json:"description"`
+}
+
+func (s *MetaService) GetTableStats(ctx context.Context, schema, table string) (TableStats, error) {
+	var stats TableStats
+	query := `
+		SELECT
+			(SELECT n_live_tup FROM pg_stat_user_tables WHERE schemaname = $1 AND relname = $2) as row_count,
+			pg_size_pretty(pg_table_size($3)) as table_size,
+			pg_size_pretty(pg_indexes_size($3)) as index_size,
+			pg_size_pretty(pg_total_relation_size($3)) as total_size,
+			COALESCE(obj_description($3::regclass, 'pg_class'), '') as description;
+	`
+	fullTable := fmt.Sprintf("%s.%s", schema, table)
+	err := s.db.QueryRow(ctx, query, schema, table, fullTable).Scan(
+		&stats.RowCount, &stats.TableSize, &stats.IndexSize, &stats.TotalSize, &stats.Description,
+	)
+	return stats, err
 }
