@@ -14,3 +14,12 @@ func (s *Service) SaveSysSetting(ctx context.Context, key string, value map[stri
 	`, key, models.JSONB(value))
 	return err
 }
+
+func (s *Service) GetSysSetting(ctx context.Context, key string) (map[string]any, error) {
+	var val map[string]any
+	err := s.db.QueryRow(ctx, "SELECT value FROM auth.settings WHERE key = $1", key).Scan(&val)
+	if err != nil {
+		return nil, err
+	}
+	return val, nil
+}

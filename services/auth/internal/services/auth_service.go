@@ -38,6 +38,8 @@ type Mailer interface {
 	SendConfirmation(to, name, confirmURL string) error
 	SendPasswordReset(to, name, resetURL string) error
 	SendMagicLink(to, magicURL string) error
+	SendInvite(to, inviteURL string) error
+	SendSecurityAlert(to, alertType string, details map[string]interface{}) error
 }
 
 // NewAuthService creates an AuthService with Postgres connection pool
@@ -56,6 +58,8 @@ func NewAuthService(cfg *config.Config, log *zap.Logger) (*AuthService, error) {
 		log:        log,
 		client:     &http.Client{Timeout: 20 * time.Second},
 	}
+	service.mailer = NewSmtpMailer(pool, log, cfg)
+
 	if err := service.ensureSystemTables(context.Background()); err != nil {
 		pool.Close()
 		return nil, err
@@ -477,6 +481,9 @@ func (s *AuthService) AdminInviteUser(ctx context.Context, email string) (*model
 	s.log.Info("user invited by admin", zap.String("user_id", user.ID), zap.String("email", email))
 	if link, linkErr := s.GenerateActionLink(ctx, ActionLinkInvite, user.ID, user.Email, s.cfg.SiteURL); linkErr == nil {
 		s.log.Info("invite link generated", zap.String("user_id", user.ID), zap.String("invite_url", link))
+		if s.mailer != nil {
+			go s.mailer.SendInvite(user.Email, link)
+		}
 	}
 	return user, nil
 }
@@ -539,7 +546,46 @@ func (s *AuthService) UpdateUser(ctx context.Context, userID string, updates Upd
 		return nil, &AuthError{Code: "user_not_found", Message: "User not found"}
 	}
 
+	// Trigger security alerts
+	if updates.Password != "" {
+		go func() {
+			user, _ := s.GetUser(context.Background(), userID)
+			if user != nil {
+				s.sendSecurityAlert(context.Background(), user, "sec_password_changed", nil)
+			}
+		}()
+	}
+	if updates.Email != "" {
+		go func() {
+			user, _ := s.GetUser(context.Background(), userID)
+			if user != nil {
+				s.sendSecurityAlert(context.Background(), user, "sec_email_changed", nil)
+			}
+		}()
+	}
+
 	return s.GetUser(ctx, userID)
+}
+
+func (s *AuthService) sendSecurityAlert(ctx context.Context, user *models.User, alertType string, details map[string]interface{}) {
+	if s.mailer == nil {
+		return
+	}
+
+	// Check if this alert type is enabled in settings
+	var settings map[string]interface{}
+	err := s.db.QueryRow(ctx, "SELECT value FROM auth.settings WHERE key = 'security_alerts'").Scan(&settings)
+	if err == nil {
+		if enabled, ok := settings[alertType].(bool); ok && !enabled {
+			return // Alert is disabled
+		}
+	}
+
+	if err := s.mailer.SendSecurityAlert(user.Email, alertType, details); err != nil {
+		s.log.Error("failed to send security alert", zap.Error(err), zap.String("user_id", user.ID), zap.String("type", alertType))
+	} else {
+		s.log.Info("security alert sent", zap.String("user_id", user.ID), zap.String("type", alertType))
+	}
 }
 
 func (s *AuthService) IsAdmin(ctx context.Context, userID string) (bool, error) {
@@ -588,6 +634,19 @@ func (s *AuthService) CreateRecoveryToken(ctx context.Context, email, redirectTo
 	}
 	s.log.Info("password recovery link generated", zap.String("email", user.Email), zap.String("reset_url", clientLink))
 	return nil
+}
+
+func (s *AuthService) SendTestEmail(ctx context.Context, email string) error {
+	if s.mailer == nil {
+		return fmt.Errorf("mailer not configured")
+	}
+	data := map[string]interface{}{
+		"Email":   email,
+		"SiteURL": s.cfg.SiteURL,
+		"Time":    time.Now().Format(time.RFC1123),
+	}
+	// Use a special test template or a generic one
+	return s.mailer.SendSecurityAlert(email, "sec_test_email", data)
 }
 
 // CreateMagicLink sends a passwordless sign-in link to the given email (if user exists).
@@ -673,6 +732,14 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, newPassword stri
 	`, passwordHash, record.UserID); err != nil {
 		return err
 	}
+
+	// Trigger security alert
+	go func() {
+		user, _ := s.GetUser(context.Background(), record.UserID)
+		if user != nil {
+			s.sendSecurityAlert(context.Background(), user, "sec_password_changed", nil)
+		}
+	}()
 
 	return s.RevokeAllSessions(ctx, record.UserID)
 }
@@ -1082,6 +1149,20 @@ func (s *AuthService) ensureSystemTables(ctx context.Context) error {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 
+		CREATE TABLE IF NOT EXISTS auth.smtp_settings (
+			project_id TEXT PRIMARY KEY DEFAULT 'default',
+			enable_custom_smtp BOOLEAN DEFAULT FALSE,
+			sender_email TEXT,
+			sender_name TEXT,
+			host TEXT,
+			port INT,
+			username TEXT,
+			password TEXT,
+			secure BOOLEAN DEFAULT TRUE,
+			min_interval INT DEFAULT 1,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
 		CREATE TABLE IF NOT EXISTS auth.hooks (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			event TEXT NOT NULL, -- e.g., 'before_signup', 'after_login'
@@ -1118,6 +1199,32 @@ func (s *AuthService) ensureSystemTables(ctx context.Context) error {
 			expires_at TIMESTAMPTZ NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+
+		-- Seed default templates
+		INSERT INTO auth.email_templates (type, subject, body_html, body_text)
+		VALUES 
+		('signup', 'Confirm your email', '<p>Welcome! Please confirm your email by clicking <a href="{{ .ConfirmationURL }}">here</a>.</p>', 'Welcome! Confirm your email: {{ .ConfirmationURL }}'),
+		('invite', 'You have been invited', '<p>You have been invited to join. Click <a href="{{ .ConfirmationURL }}">here</a> to accept.</p>', 'You have been invited. Accept here: {{ .ConfirmationURL }}'),
+		('reset_password', 'Reset your password', '<p>Click <a href="{{ .ConfirmationURL }}">here</a> to reset your password.</p>', 'Reset your password: {{ .ConfirmationURL }}'),
+		('magic_link', 'Your sign-in link', '<p>Click <a href="{{ .ConfirmationURL }}">here</a> to sign in.</p>', 'Sign in link: {{ .ConfirmationURL }}'),
+		('change_email', 'Confirm your new email', '<p>Please confirm your new email address by clicking <a href="{{ .ConfirmationURL }}">here</a>.</p>', 'Confirm your new email: {{ .ConfirmationURL }}'),
+		('reauth', 'Confirm your identity', '<p>Please enter this code to confirm your identity: <b>{{ .Token }}</b></p>', 'Confirm your identity with code: {{ .Token }}'),
+		('sec_password_changed', 'Security Alert: Password Changed', '<p>Your password was recently changed. If this wasn''t you, please contact support.</p>', 'Your password was recently changed.'),
+		('sec_email_changed', 'Security Alert: Email Changed', '<p>Your account email address has been updated.</p>', 'Your account email was updated.'),
+		('sec_phone_changed', 'Security Alert: Phone Changed', '<p>Your account phone number has been updated.</p>', 'Your account phone number was updated.'),
+		('sec_identity_linked', 'Security Alert: New Identity Linked', '<p>A new identity (OAuth provider) was linked to your account.</p>', 'A new identity was linked to your account.'),
+		('sec_test_email', 'OmniBase SMTP Test', '<p>This is a test email from your OmniBase configuration at {{ .Time }}. If you received this, your SMTP settings are correct.</p>', 'OmniBase SMTP Test at {{ .Time }}')
+		ON CONFLICT (type) DO NOTHING;
+
+		-- Seed default system settings
+		INSERT INTO auth.settings (key, value)
+		VALUES ('security_alerts', '{"sec_password_changed": true, "sec_email_changed": true, "sec_phone_changed": true, "sec_identity_linked": true, "sec_mfa_added": true, "sec_mfa_removed": true}'::jsonb)
+		ON CONFLICT (key) DO NOTHING;
+
+		-- Seed default SMTP (disabled by default)
+		INSERT INTO auth.smtp_settings (project_id, enable_custom_smtp, min_interval)
+		VALUES ('default', FALSE, 1)
+		ON CONFLICT (project_id) DO NOTHING;
 	`)
 	return err
 }

@@ -107,12 +107,16 @@ func main() {
 	admin.Get("/oauth/apps", idHandler.ListOAuthApps)
 	admin.Post("/oauth/apps", idHandler.SaveOAuthApp)
 
-	// Config, Webhooks, Templates
+	// Config, Webhooks, Templates, SMTP
 	admin.Get("/config/templates", idHandler.GetEmailTemplates)
 	admin.Post("/config/templates", idHandler.SaveEmailTemplate)
+	admin.Get("/config/smtp", idHandler.GetSMTPSettings)
+	admin.Post("/config/smtp", idHandler.SaveSMTPSettings)
+	admin.Post("/config/test-email", idHandler.SendTestEmail)
 	admin.Get("/hooks", idHandler.GetAuthHooks)
 	admin.Post("/hooks", idHandler.SaveAuthHook)
 	admin.Delete("/hooks/:id", idHandler.DeleteAuthHook)
+	admin.Get("/config/settings/:key", idHandler.GetSettings)
 	admin.Post("/config/settings/:key", idHandler.SaveSettings)
 
 	// SAML, Banned IPs, Auth OAuth Server

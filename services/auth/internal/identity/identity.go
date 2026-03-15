@@ -34,6 +34,10 @@ func (s *Service) GetUserByEmail(ctx context.Context, email string) (*models.Use
 	return s.authSvc.GetUserByEmail(ctx, email)
 }
 
+func (s *Service) SendTestEmail(ctx context.Context, email string) error {
+	return s.authSvc.SendTestEmail(ctx, email)
+}
+
 func (s *Service) SignUp(ctx context.Context, req services.SignUpRequest) (*services.SignUpResponse, error) {
 	return s.authSvc.SignUp(ctx, req)
 }

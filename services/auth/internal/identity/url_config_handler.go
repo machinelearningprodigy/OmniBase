@@ -15,3 +15,12 @@ func (h *Handler) SaveSettings(c *fiber.Ctx) error {
 	}
 	return c.SendStatus(fiber.StatusOK)
 }
+
+func (h *Handler) GetSettings(c *fiber.Ctx) error {
+	key := c.Params("key")
+	val, err := h.svc.GetSysSetting(c.Context(), key)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Setting not found"})
+	}
+	return c.JSON(val)
+}
