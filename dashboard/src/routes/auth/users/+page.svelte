@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { getHeaders, getOmniBaseUrl } from '$lib/api'
+  import { authStore } from '$lib/stores/auth'
+  import { Globe, Shield, User as UserIcon, LogIn, Mail, Trash2, Ban, Fingerprint, Phone } from 'lucide-svelte'
 
   interface User {
     id: string
@@ -11,6 +13,14 @@
     last_sign_in_at: string | null
     created_at: string
     updated_at: string
+    project_id: string | null
+    display_name: string
+    avatar_url: string
+    providers: string[]
+    mfa_enabled: boolean
+    email_verified: boolean
+    phone_verified: boolean
+    passkey_count: number
   }
 
   let users = $state<User[]>([])
@@ -32,10 +42,14 @@
     try {
       loading = true
       error = null
-      const resp = await fetch(
-        `${getOmniBaseUrl()}/auth/v1/admin/users?page=${page}&per_page=${perPage}`,
-        { headers: getHeaders() }
-      )
+      const projId = $authStore.activeProject?.id
+      const url = new URL(`${getOmniBaseUrl()}/auth/v1/admin/users`)
+      url.searchParams.set('page', page.toString())
+      url.searchParams.set('per_page', perPage.toString())
+      if (searchQuery) url.searchParams.set('search', searchQuery)
+      if (projId) url.searchParams.set('project_id', projId)
+
+      const resp = await fetch(url.toString(), { headers: getHeaders() })
       if (resp.ok) {
         const data = await resp.json()
         users = data.users || []
@@ -144,6 +158,14 @@
     }
   }
 
+  function getProviderColor(p: string) {
+    if (p === 'google') return '#4285F4'
+    if (p === 'github') return '#fff'
+    if (p === 'email') return '#00c48c'
+    if (p === 'passkey') return '#ff9900'
+    return '#8e75ff'
+  }
+
   let filteredUsers = $derived(
     users.filter(u =>
       u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -151,7 +173,10 @@
     )
   )
 
-  onMount(loadUsers)
+  $effect(() => {
+    // Re-run whenever page or searchQuery changes (debounced search would be better for prod)
+    loadUsers();
+  })
 </script>
 
 <svelte:head>
@@ -215,10 +240,11 @@
         <table>
           <thead>
             <tr>
-              <th>Email</th>
-              <th>User ID</th>
-              <th>Role</th>
+              <th>User</th>
+              <th>Display Name</th>
               <th>Status</th>
+              <th>Providers</th>
+              <th>MFA</th>
               <th>Last Sign In</th>
               <th>Created</th>
               <th style="text-align: right;">Actions</th>
@@ -228,39 +254,70 @@
             {#each filteredUsers as user}
               <tr style="{user.is_banned ? 'opacity: 0.6;' : ''}">
                 <td>
-                  <div style="display: flex; align-items: center; gap: 8px;">
-                    <div style="
-                      width: 28px; height: 28px; border-radius: 50%;
-                      background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
-                      display: flex; align-items: center; justify-content: center;
-                      font-size: 11px; font-weight: 700; color: white; flex-shrink: 0;
-                    ">
-                      {user.email[0].toUpperCase()}
-                    </div>
-                    <div>
-                      <div style="font-size: 13px; font-weight: 500;">{user.email}</div>
-                      {#if user.email_confirmed_at}
-                        <div style="font-size: 10px; color: var(--status-success);">✓ Verified</div>
-                      {:else}
-                        <div style="font-size: 10px; color: var(--text-muted);">Unverified</div>
-                      {/if}
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    {#if user.avatar_url}
+                      <img src={user.avatar_url} alt="" style="width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border-default);" />
+                    {:else}
+                      <div style="
+                        width: 34px; height: 34px; border-radius: 50%;
+                        background: var(--card-bg-lighter);
+                        display: flex; align-items: center; justify-content: center;
+                        font-family: var(--font-mono);
+                        font-size: 14px; font-weight: 600; color: var(--brand-primary);
+                        border: 1px solid var(--border-default);
+                        flex-shrink: 0;
+                      ">
+                        {user.email[0].toUpperCase()}
+                      </div>
+                    {/if}
+                    <div style="min-width: 0;">
+                      <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis;">{user.email}</div>
+                      <div style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">{user.id}</div>
                     </div>
                   </div>
                 </td>
-                <td style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">
-                  {user.id.slice(0, 8)}…
-                </td>
-                <td>
-                  <span class="badge {user.role === 'service_role' ? 'badge-warning' : 'badge-neutral'}">
-                    {user.role}
-                  </span>
+                <td style="font-size: 13px; font-weight: 500;">
+                  {#if user.display_name}
+                    {user.display_name}
+                  {:else}
+                    <span style="opacity: 0.3;">Not provided</span>
+                  {/if}
                 </td>
                 <td>
                   {#if user.is_banned}
-                    <span class="badge badge-error">Banned</span>
+                    <div class="flex items-center gap-1" style="color: var(--status-error);">
+                      <Ban size={12} /> <span style="font-size: 12px; font-weight: 600;">Suspended</span>
+                    </div>
                   {:else}
-                    <span class="badge badge-success">Active</span>
+                    <div class="flex items-center gap-1" style="color: var(--status-success);">
+                      <div style="width: 6px; height: 6px; border-radius: 50%; background: currentColor;"></div>
+                      <span style="font-size: 12px; font-weight: 600;">Active</span>
+                    </div>
                   {/if}
+                </td>
+                <td>
+                  <div class="flex gap-1 flex-wrap">
+                    {#each user.providers as p}
+                      <span class="badge" style="
+                        font-size: 10px; 
+                        padding: 3px 8px; 
+                        background: {getProviderColor(p)}15; 
+                        color: {getProviderColor(p)};
+                        border: 1px solid {getProviderColor(p)}30;
+                        text-transform: capitalize;
+                      ">
+                        {p}
+                      </span>
+                    {/each}
+                  </div>
+                </td>
+                <td>
+                  <div class="flex gap-2" style="opacity: 0.8;">
+                    <Mail size={16} title="Email Verified" style="color: {user.email_verified ? 'var(--status-success)' : 'var(--text-muted)'}; opacity: {user.email_verified ? 1 : 0.2};" />
+                    <Phone size={16} title="Phone Verified" style="color: {user.phone_verified ? 'var(--status-success)' : 'var(--text-muted)'}; opacity: {user.phone_verified ? 1 : 0.2};" />
+                    <Fingerprint size={16} title="{user.passkey_count} Passkeys" style="color: {user.passkey_count > 0 ? '#ff9900' : 'var(--text-muted)'}; opacity: {user.passkey_count > 0 ? 1 : 0.2};" />
+                    <Shield size={16} title="MFA Enabled" style="color: {user.mfa_enabled ? 'var(--brand-primary)' : 'var(--text-muted)'}; opacity: {user.mfa_enabled ? 1 : 0.2};" />
+                  </div>
                 </td>
                 <td style="font-size: 12px; color: var(--text-secondary);">
                   {timeAgo(user.last_sign_in_at)}

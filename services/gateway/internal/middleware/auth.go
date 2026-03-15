@@ -12,6 +12,7 @@ const (
 	userIDKey    = "user_id"
 	userEmailKey = "user_email"
 	userRoleKey  = "user_role"
+	projectIDKey = "project_id"
 	claimsKey    = "jwt_claims"
 )
 
@@ -39,11 +40,13 @@ func InjectUserContext(jm *jwt.Manager) fiber.Handler {
 		c.Locals(userIDKey, claims.UserID)
 		c.Locals(userEmailKey, claims.Email)
 		c.Locals(userRoleKey, claims.Role)
+		c.Locals(projectIDKey, claims.ProjectID)
 		c.Locals(claimsKey, claims)
 
-		// Inject user info as headers for PostgREST RLS
+		// Inject user info as headers for internal services
 		c.Set("X-OmniBase-User-ID", claims.UserID)
 		c.Set("X-OmniBase-Role", claims.Role)
+		c.Set("X-OmniBase-Project-ID", claims.ProjectID)
 
 		return c.Next()
 	}

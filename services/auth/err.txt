@@ -1,0 +1,4 @@
+# github.com/machinelearningprodigy/OmniBase/auth/internal/identity
+internal\identity\user_management_service.go:7:2: "time" imported and not used
+internal\identity\user_management_service.go:9:2: "github.com/google/uuid" imported and not used
+internal\identity\user_management_service.go:10:2: "github.com/machinelearningprodigy/OmniBase/auth/internal/services" imported and not used

@@ -66,7 +66,7 @@ func main() {
 	app.Use(compress.New(compress.Config{Level: compress.LevelBestSpeed}))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "*", // Configured per-project in Phase 6
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-OmniBase-Key, Accept-Profile, Content-Profile, Prefer",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-OmniBase-Key, X-OmniBase-Project-ID, Accept-Profile, Content-Profile, Prefer",
 		AllowMethods:     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 		AllowCredentials: false,
 	}))

@@ -189,8 +189,11 @@ func (p *Proxy) proxy(c *fiber.Ctx, injectAuth bool) error {
 	}
 	defer resp.Body.Close()
 
-	// Copy response headers
+	// Copy response headers (skipping CORS headers to prevent duplicates)
 	for key, values := range resp.Header {
+		if strings.HasPrefix(strings.ToLower(key), "access-control-") {
+			continue
+		}
 		for _, v := range values {
 			c.Set(key, v)
 		}

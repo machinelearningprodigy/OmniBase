@@ -77,8 +77,9 @@ func (s *AuthService) VerifyToken(token string) (*jwt.Claims, error) {
 type SignUpRequest struct {
 	Email    string         `json:"email"`
 	Password string         `json:"password"`
-	Phone    string         `json:"phone,omitempty"`
-	Options  *SignUpOptions `json:"options,omitempty"`
+	Phone     string         `json:"phone,omitempty"`
+	ProjectID string         `json:"project_id,omitempty"`
+	Options   *SignUpOptions `json:"options,omitempty"`
 }
 
 type SignUpOptions struct {
@@ -156,10 +157,10 @@ func (s *AuthService) SignUp(ctx context.Context, req SignUpRequest) (*SignUpRes
 
 	_, err = s.db.Exec(ctx, `
 		INSERT INTO auth.users (
-			id, email, password_hash, role, raw_user_meta_data, is_super_admin, email_confirmed_at, created_at, updated_at
+			id, email, password_hash, role, raw_user_meta_data, is_super_admin, email_confirmed_at, project_id, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, user.ID, user.Email, user.PasswordHash, user.Role, user.RawUserMetaData, user.IsSuperAdmin, user.EmailConfirmedAt, user.CreatedAt, user.UpdatedAt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, user.ID, user.Email, user.PasswordHash, user.Role, user.RawUserMetaData, user.IsSuperAdmin, user.EmailConfirmedAt, req.ProjectID, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
@@ -172,7 +173,7 @@ func (s *AuthService) SignUp(ctx context.Context, req SignUpRequest) (*SignUpRes
 	// Issue tokens only if email auto-confirm is enabled
 	if s.cfg.Env == "development" {
 		// In development, auto-confirm and issue tokens
-		accessToken, refreshToken, err := s.issueTokenPair(ctx, user, "", "")
+		accessToken, refreshToken, err := s.IssueTokenPair(ctx, user, "", "")
 		if err != nil {
 			return nil, err
 		}
@@ -198,10 +199,10 @@ type SignInRequest struct {
 }
 
 // SignIn authenticates a user and returns tokens
-func (s *AuthService) SignIn(ctx context.Context, req SignInRequest) (*SignUpResponse, error) {
+func (s *AuthService) SignIn(ctx context.Context, req SignInRequest, userAgent, ip string) (*SignUpResponse, error) {
 	switch req.GrantType {
 	case "password":
-		return s.signInWithPassword(ctx, req)
+		return s.signInWithPassword(ctx, req, userAgent, ip)
 	case "refresh_token":
 		return s.refreshTokenGrant(ctx, req.RefreshToken)
 	default:
@@ -209,7 +210,7 @@ func (s *AuthService) SignIn(ctx context.Context, req SignInRequest) (*SignUpRes
 	}
 }
 
-func (s *AuthService) signInWithPassword(ctx context.Context, req SignInRequest) (*SignUpResponse, error) {
+func (s *AuthService) signInWithPassword(ctx context.Context, req SignInRequest, userAgent, ip string) (*SignUpResponse, error) {
 	if req.Email == "" || req.Password == "" {
 		return nil, &AuthError{Code: "invalid_credentials", Message: "Email and password are required"}
 	}
@@ -242,7 +243,7 @@ func (s *AuthService) signInWithPassword(ctx context.Context, req SignInRequest)
 	// Update last sign in
 	s.db.Exec(ctx, "UPDATE auth.users SET last_sign_in_at = NOW() WHERE id = $1", user.ID)
 
-	accessToken, refreshToken, err := s.issueTokenPair(ctx, &user, "", "")
+	accessToken, refreshToken, err := s.IssueTokenPair(ctx, &user, userAgent, ip)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +292,7 @@ func (s *AuthService) refreshTokenGrant(ctx context.Context, refreshToken string
 		s.log.Warn("failed to revoke previous refresh token", zap.Error(err), zap.String("user_id", claims.UserID))
 	}
 
-	accessToken, newRefreshToken, err := s.issueTokenPair(ctx, &user, "", "")
+	accessToken, newRefreshToken, err := s.IssueTokenPair(ctx, &user, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -306,6 +307,27 @@ func (s *AuthService) refreshTokenGrant(ctx context.Context, refreshToken string
 }
 
 // GetUser returns the user associated with the provided JWT
+func (s *AuthService) DB() *pgxpool.Pool      { return s.db }
+func (s *AuthService) Config() *config.Config { return s.cfg }
+
+func (s *AuthService) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
+	var user models.User
+	err := s.db.QueryRow(ctx, `
+		SELECT id, email, role, is_banned, email_confirmed_at, last_sign_in_at, 
+		       raw_user_meta_data, raw_app_meta_data, is_super_admin, created_at, updated_at
+		FROM auth.users WHERE email = $1
+	`, email).Scan(
+		&user.ID, &user.Email, &user.Role, &user.IsBanned,
+		&user.EmailConfirmedAt, &user.LastSignInAt,
+		&user.RawUserMetaData, &user.RawAppMetaData, &user.IsSuperAdmin,
+		&user.CreatedAt, &user.UpdatedAt,
+	)
+	if err != nil {
+		return nil, &AuthError{Code: "user_not_found", Message: "User not found"}
+	}
+	return &user, nil
+}
+
 func (s *AuthService) GetUser(ctx context.Context, userID string) (*models.User, error) {
 	var user models.User
 	err := s.db.QueryRow(ctx, `
@@ -426,7 +448,7 @@ func (s *AuthService) AdminInviteUser(ctx context.Context, email string) (*model
 	}
 
 	// Generate a random temporary password
-	tempPwd, _ := generateSecureToken(16)
+	tempPwd, _ := GenerateSecureToken(16)
 	passwordHash, err := hashPassword(tempPwd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
@@ -542,7 +564,7 @@ func (s *AuthService) CreateRecoveryToken(ctx context.Context, email, redirectTo
 	if redirectTo == "" {
 		redirectTo = s.cfg.SiteURL + "/auth/reset-password"
 	}
-	token, err := generateSecureToken(32)
+	token, err := GenerateSecureToken(32)
 	if err != nil {
 		return err
 	}
@@ -669,7 +691,7 @@ func (s *AuthService) GenerateActionLink(ctx context.Context, tokenType ActionLi
 		redirectTo = s.cfg.SiteURL
 	}
 
-	token, err := generateSecureToken(32)
+	token, err := GenerateSecureToken(32)
 	if err != nil {
 		return "", err
 	}
@@ -707,13 +729,13 @@ func (s *AuthService) ListProviders() []OAuthProvider {
 	return providers
 }
 
-func (s *AuthService) OAuthAuthorizeURL(ctx context.Context, provider, redirectTo string) (string, error) {
-	cfg, err := s.providerConfig(provider)
+func (s *AuthService) OAuthAuthorizeURL(ctx context.Context, provider, redirectTo, projectID string) (string, error) {
+	cfg, err := s.providerConfig(ctx, provider, projectID)
 	if err != nil {
 		return "", err
 	}
 
-	state, err := generateSecureToken(24)
+	state, err := GenerateSecureToken(24)
 	if err != nil {
 		return "", err
 	}
@@ -722,9 +744,9 @@ func (s *AuthService) OAuthAuthorizeURL(ctx context.Context, provider, redirectT
 	}
 
 	if _, err := s.db.Exec(ctx, `
-		INSERT INTO omnibase.oauth_states (state_hash, provider, redirect_to, expires_at)
-		VALUES ($1, $2, $3, $4)
-	`, hashToken(state), provider, redirectTo, time.Now().UTC().Add(10*time.Minute)); err != nil {
+		INSERT INTO omnibase.oauth_states (state_hash, provider, redirect_to, project_id, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, hashToken(state), provider, redirectTo, projectID, time.Now().UTC().Add(10*time.Minute)); err != nil {
 		return "", err
 	}
 
@@ -748,7 +770,7 @@ func (s *AuthService) CompleteOAuth(ctx context.Context, provider, code, state s
 		return nil, "", err
 	}
 
-	cfg, err := s.providerConfig(provider)
+	cfg, err := s.providerConfig(ctx, provider, stateRecord.ProjectID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -768,7 +790,7 @@ func (s *AuthService) CompleteOAuth(ctx context.Context, provider, code, state s
 		return nil, "", err
 	}
 
-	accessToken, refreshToken, err := s.issueTokenPair(ctx, user, "", "")
+	accessToken, refreshToken, err := s.IssueTokenPair(ctx, user, "", "")
 	if err != nil {
 		return nil, "", err
 	}
@@ -784,7 +806,7 @@ func (s *AuthService) CompleteOAuth(ctx context.Context, provider, code, state s
 
 // IssueTokenPairForUser issues access and refresh tokens for a user (e.g. after magic link verify).
 func (s *AuthService) IssueTokenPairForUser(ctx context.Context, user *models.User) (*SignUpResponse, error) {
-	accessToken, refreshToken, err := s.issueTokenPair(ctx, user, "", "")
+	accessToken, refreshToken, err := s.IssueTokenPair(ctx, user, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -799,7 +821,7 @@ func (s *AuthService) IssueTokenPairForUser(ctx context.Context, user *models.Us
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-func (s *AuthService) issueTokenPair(ctx context.Context, user *models.User, userAgent, ip string) (accessToken, refreshToken string, err error) {
+func (s *AuthService) IssueTokenPair(ctx context.Context, user *models.User, userAgent, ip string) (accessToken, refreshToken string, err error) {
 	accessToken, err = s.jwtManager.IssueAccessToken(user.ID, user.Email, user.Role, "")
 	if err != nil {
 		return "", "", fmt.Errorf("failed to issue access token: %w", err)
@@ -882,7 +904,7 @@ func safeCompare(a, b []byte) bool {
 	return result == 0
 }
 
-func generateSecureToken(n int) (string, error) {
+func GenerateSecureToken(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -910,6 +932,7 @@ type OAuthProvider struct {
 type oauthStateRecord struct {
 	Provider   string
 	RedirectTo string
+	ProjectID  string
 }
 
 type oauthProviderConfig struct {
@@ -1002,6 +1025,99 @@ func (s *AuthService) ensureSystemTables(ctx context.Context) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 		CREATE INDEX IF NOT EXISTS oauth_states_provider_idx ON omnibase.oauth_states(provider);
+
+		CREATE TABLE IF NOT EXISTS auth.audit_logs (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+			action TEXT NOT NULL,
+			ip_address INET,
+			user_agent TEXT,
+			details JSONB,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS audit_logs_user_id_idx ON auth.audit_logs(user_id);
+
+		CREATE TABLE IF NOT EXISTS auth.mfa_factors (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+			factor_type TEXT NOT NULL,
+			status TEXT NOT NULL,
+			secret TEXT,
+			last_used_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS mfa_factors_user_id_idx ON auth.mfa_factors(user_id);
+
+		CREATE TABLE IF NOT EXISTS auth.passkeys (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+			credential_id TEXT NOT NULL UNIQUE,
+			public_key BYTEA NOT NULL,
+			aaguid TEXT,
+			sign_count INTEGER DEFAULT 0,
+			last_used_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS passkeys_user_id_idx ON auth.passkeys(user_id);
+
+		CREATE TABLE IF NOT EXISTS auth.rate_limits (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			key TEXT NOT NULL UNIQUE,
+			count INTEGER DEFAULT 1,
+			reset_at TIMESTAMPTZ NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS auth.settings (
+			key TEXT PRIMARY KEY,
+			value JSONB NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS auth.email_templates (
+			type TEXT PRIMARY KEY,
+			subject TEXT NOT NULL,
+			body_html TEXT NOT NULL,
+			body_text TEXT,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS auth.hooks (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			event TEXT NOT NULL, -- e.g., 'before_signup', 'after_login'
+			endpoint_url TEXT NOT NULL,
+			secret TEXT,
+			is_active BOOLEAN DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS auth.identity_providers (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			type TEXT NOT NULL, -- 'oauth2', 'saml', 'oidc'
+			name TEXT NOT NULL UNIQUE,
+			client_id TEXT,
+			client_secret TEXT,
+			metadata_url TEXT,
+			is_active BOOLEAN DEFAULT TRUE,
+			config JSONB DEFAULT '{}'::jsonb,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS auth.banned_ips (
+			ip INET PRIMARY KEY,
+			reason TEXT,
+			expires_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS auth.web3_nonces (
+			wallet_address TEXT PRIMARY KEY,
+			nonce TEXT NOT NULL,
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
 	`)
 	return err
 }
@@ -1043,15 +1159,36 @@ func (s *AuthService) consumeOAuthState(ctx context.Context, provider, state str
 		WHERE state_hash = $1
 		  AND provider = $2
 		  AND expires_at > NOW()
-		RETURNING provider, COALESCE(redirect_to, '')
-	`, hashToken(state), provider).Scan(&record.Provider, &record.RedirectTo)
+		RETURNING provider, COALESCE(redirect_to, ''), COALESCE(project_id::text, '')
+	`, hashToken(state), provider).Scan(&record.Provider, &record.RedirectTo, &record.ProjectID)
 	if err != nil {
 		return nil, &AuthError{Code: "invalid_oauth_state", Message: "Invalid or expired OAuth state"}
 	}
 	return &record, nil
 }
 
-func (s *AuthService) providerConfig(provider string) (*oauthProviderConfig, error) {
+func (s *AuthService) providerConfig(ctx context.Context, provider, projectID string) (*oauthProviderConfig, error) {
+	// 1. Try DB first
+	if projectID != "" {
+		var cid, cs string
+		var isActive bool
+		err := s.db.QueryRow(ctx, `
+			SELECT client_id, client_secret, is_active 
+			FROM auth.identity_providers 
+			WHERE name = $1 AND project_id = $2 AND type = 'oauth'
+		`, provider, projectID).Scan(&cid, &cs, &isActive)
+		
+		if err == nil && isActive && cid != "" && cs != "" {
+			conf := s.getStaticProviderConfig(provider)
+			if conf != nil {
+				conf.ClientID = cid
+				conf.ClientSecret = cs
+				return conf, nil
+			}
+		}
+	}
+
+	// 2. Fallback to Env vars (Platform level / Default)
 	switch provider {
 	case "google":
 		if s.cfg.GoogleClientID == "" || s.cfg.GoogleClientSecret == "" {
@@ -1078,8 +1215,61 @@ func (s *AuthService) providerConfig(provider string) (*oauthProviderConfig, err
 			Scope:        "read:user user:email",
 		}, nil
 	default:
-		return nil, &AuthError{Code: "unsupported_provider", Message: "Unsupported OAuth provider"}
+		// Try static config even if not in DB, in case we add more env support later
+		static := s.getStaticProviderConfig(provider)
+		if static != nil && static.ClientID != "" {
+			return static, nil
+		}
+		return nil, &AuthError{Code: "unsupported_provider", Message: "Unsupported OAuth provider or not configured"}
 	}
+}
+
+func (s *AuthService) getStaticProviderConfig(provider string) *oauthProviderConfig {
+	switch provider {
+	case "google":
+		return &oauthProviderConfig{
+			AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL: "https://oauth2.googleapis.com/token",
+			UserURL:  "https://openidconnect.googleapis.com/v1/userinfo",
+			Scope:    "openid email profile",
+		}
+	case "github":
+		return &oauthProviderConfig{
+			AuthURL:  "https://github.com/login/oauth/authorize",
+			TokenURL: "https://github.com/login/oauth/access_token",
+			UserURL:  "https://api.github.com/user",
+			Scope:    "read:user user:email",
+		}
+	case "discord":
+		return &oauthProviderConfig{
+			AuthURL:  "https://discord.com/api/oauth2/authorize",
+			TokenURL: "https://discord.com/api/oauth2/token",
+			UserURL:  "https://discord.com/api/users/@me",
+			Scope:    "identify email",
+		}
+	case "facebook":
+		return &oauthProviderConfig{
+			AuthURL:  "https://www.facebook.com/v12.0/dialog/oauth",
+			TokenURL: "https://graph.facebook.com/v12.0/oauth/access_token",
+			UserURL:  "https://graph.facebook.com/me?fields=id,name,email,picture",
+			Scope:    "email public_profile",
+		}
+	case "microsoft":
+		return &oauthProviderConfig{
+			AuthURL:  "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+			TokenURL: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+			UserURL:  "https://graph.microsoft.com/v1.0/me",
+			Scope:    "openid email profile User.Read",
+		}
+	case "apple":
+		return &oauthProviderConfig{
+			AuthURL:  "https://appleid.apple.com/auth/authorize",
+			TokenURL: "https://appleid.apple.com/auth/token",
+			UserURL:  "", // Apple uses ID tokens
+			Scope:    "name email",
+		}
+	}
+	return nil
 }
 
 func (s *AuthService) oauthCallbackURL(provider string) string {
@@ -1173,6 +1363,53 @@ func (s *AuthService) fetchOAuthIdentity(ctx context.Context, cfg *oauthProvider
 			return "", "", &AuthError{Code: "oauth_identity_invalid", Message: "GitHub account does not expose a verified email"}
 		}
 		return email, fmt.Sprintf("%d", user.ID), nil
+	case "discord":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var user struct {
+			ID    string `json:"id"`
+			Email string `json:"email"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+			return "", "", err
+		}
+		return user.Email, user.ID, nil
+	case "facebook":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL+"&access_token="+accessToken, nil)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var user struct {
+			ID    string `json:"id"`
+			Email string `json:"email"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+			return "", "", err
+		}
+		return user.Email, user.ID, nil
+	case "microsoft":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var user struct {
+			ID    string `json:"id"`
+			Email string `json:"mail"` // MS Graph uses 'mail'
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+			return "", "", err
+		}
+		return user.Email, user.ID, nil
 	default:
 		return "", "", &AuthError{Code: "unsupported_provider", Message: "Unsupported OAuth provider"}
 	}
@@ -1275,4 +1512,16 @@ type AuthError struct {
 
 func (e *AuthError) Error() string {
 	return e.Message
+}
+
+func (s *AuthService) GetProjectKeys() (string, string, error) {
+	anon, err := s.jwtManager.IssueAnonymousToken("default")
+	if err != nil {
+		return "", "", err
+	}
+	service, err := s.jwtManager.IssueServiceRoleToken("default")
+	if err != nil {
+		return "", "", err
+	}
+	return anon, service, nil
 }

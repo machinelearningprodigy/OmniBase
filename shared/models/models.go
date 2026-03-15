@@ -20,6 +20,17 @@ type User struct {
 	IsSuperAdmin     bool       `json:"is_super_admin,omitempty" db:"is_super_admin"`
 	IsBanned         bool       `json:"is_banned" db:"is_banned"`
 	LastSignInAt     *time.Time `json:"last_sign_in_at,omitempty" db:"last_sign_in_at"`
+	ProjectID        string     `json:"project_id,omitempty" db:"project_id"`
+	
+	// Helper fields for UI
+	DisplayName      string     `json:"display_name,omitempty" db:"-"`
+	AvatarURL        string     `json:"avatar_url,omitempty" db:"-"`
+	Providers        []string   `json:"providers,omitempty" db:"-"`
+	MFAEnabled       bool       `json:"mfa_enabled" db:"-"`
+	EmailVerified    bool       `json:"email_verified" db:"-"`
+	PhoneVerified    bool       `json:"phone_verified" db:"-"`
+	PasskeyCount     int        `json:"passkey_count" db:"-"`
+
 	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
 }
@@ -45,6 +56,50 @@ type OAuthAccount struct {
 	RefreshToken string    `json:"-" db:"refresh_token"`
 	ExpiresAt    time.Time `json:"expires_at" db:"expires_at"`
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+}
+
+// AuditLog tracks authentication events
+type AuditLog struct {
+	ID        string    `json:"id" db:"id"`
+	UserID    *string   `json:"user_id,omitempty" db:"user_id"`
+	Action    string    `json:"action" db:"action"`
+	IPAddress *string   `json:"ip_address,omitempty" db:"ip_address"`
+	UserAgent *string   `json:"user_agent,omitempty" db:"user_agent"`
+	Details   JSONB     `json:"details,omitempty" db:"details"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}
+
+// MFAFactor represents a user's 2FA mechanism
+type MFAFactor struct {
+	ID         string    `json:"id" db:"id"`
+	UserID     string    `json:"user_id" db:"user_id"`
+	FactorType string    `json:"factor_type" db:"factor_type"` // e.g. "totp", "sms"
+	Status     string    `json:"status" db:"status"`           // "verified", "unverified"
+	Secret     string    `json:"-" db:"secret"`
+	LastUsedAt *time.Time`json:"last_used_at,omitempty" db:"last_used_at"`
+	CreatedAt  time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// Passkey represents a WebAuthn credential
+type Passkey struct {
+	ID           string    `json:"id" db:"id"`
+	UserID       string    `json:"user_id" db:"user_id"`
+	CredentialID string    `json:"credential_id" db:"credential_id"`
+	PublicKey    []byte    `json:"-" db:"public_key"`
+	AAGUID       string    `json:"aaguid,omitempty" db:"aaguid"`
+	SignCount    int       `json:"sign_count" db:"sign_count"`
+	LastUsedAt   *time.Time`json:"last_used_at,omitempty" db:"last_used_at"`
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+}
+
+// RateLimit represents an API rate limit status
+type RateLimit struct {
+	Key     string    `json:"key"`
+	Limit   int       `json:"limit"`
+	Warning int       `json:"warning,omitempty"`
+	Count   int       `json:"count"`
+	ResetSeconds int  `json:"reset_seconds"`
 }
 
 // ─── Storage Models ───────────────────────────────────────────────────────────
@@ -85,6 +140,18 @@ type Project struct {
 	Region      string    `json:"region" db:"region"`
 	Status      string    `json:"status" db:"status"` // "active" | "paused" | "deleting"
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+}
+
+// IdentityProvider represents an external auth provider (Social, SAML, etc)
+type IdentityProvider struct {
+	ID           string `json:"id" db:"id"`
+	ProjectID    string `json:"project_id" db:"project_id"`
+	Type         string `json:"type" db:"type"` // "oauth" | "saml"
+	Name         string `json:"name" db:"name"` // "google", "github", etc
+	ClientID     string `json:"client_id,omitempty" db:"client_id"`
+	ClientSecret string `json:"client_secret,omitempty" db:"client_secret"`
+	MetadataURL  string `json:"metadata_url,omitempty" db:"metadata_url"`
+	IsActive     bool   `json:"is_active" db:"is_active"`
 }
 
 // ─── API Response Models ──────────────────────────────────────────────────────

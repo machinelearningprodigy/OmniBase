@@ -28,6 +28,7 @@ func (h *AuthHandler) SignUp(c *fiber.Ctx) error {
 		})
 	}
 
+	req.ProjectID = c.Get("X-OmniBase-Project-ID")
 	resp, err := h.authSvc.SignUp(c.Context(), req)
 	if err != nil {
 		return handleAuthError(c, err)
@@ -44,7 +45,7 @@ func (h *AuthHandler) SignIn(c *fiber.Ctx) error {
 		})
 	}
 
-	resp, err := h.authSvc.SignIn(c.Context(), req)
+	resp, err := h.authSvc.SignIn(c.Context(), req, c.Get("User-Agent"), c.IP())
 	if err != nil {
 		return handleAuthError(c, err)
 	}
@@ -64,7 +65,7 @@ func (h *AuthHandler) SignOut(c *fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusNoContent)
 	}
 
-	userID, _, err := h.getClaims(c)
+	userID, _, err := h.GetClaims(c)
 	if err == nil && userID != "" {
 		if err := h.authSvc.RevokeAllSessions(c.Context(), userID); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"code": "internal_error", "message": err.Error()})
@@ -89,7 +90,7 @@ func (h *AuthHandler) GetUser(c *fiber.Ctx) error {
 }
 
 func (h *AuthHandler) UpdateUser(c *fiber.Ctx) error {
-	userID, _, err := h.getClaims(c)
+	userID, _, err := h.GetClaims(c)
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"code": "unauthorized", "message": "Not authenticated",
@@ -196,7 +197,12 @@ func (h *AuthHandler) ResetPassword(c *fiber.Ctx) error {
 func (h *AuthHandler) OAuthAuthorize(c *fiber.Ctx) error {
 	provider := c.Query("provider")
 	redirectTo := c.Query("redirect_to")
-	authURL, err := h.authSvc.OAuthAuthorizeURL(c.Context(), provider, redirectTo)
+	projectID := c.Query("project_id")
+	if projectID == "" {
+		projectID = c.Get("X-OmniBase-Project-ID")
+	}
+
+	authURL, err := h.authSvc.OAuthAuthorizeURL(c.Context(), provider, redirectTo, projectID)
 	if err != nil {
 		return handleAuthError(c, err)
 	}
@@ -227,86 +233,7 @@ func (h *AuthHandler) OAuthCallback(c *fiber.Ctx) error {
 	return c.Redirect(target)
 }
 
-func (h *AuthHandler) AdminListUsers(c *fiber.Ctx) error {
-	page := max(1, c.QueryInt("page", 1))
-	perPage := min(100, max(1, c.QueryInt("per_page", 50)))
 
-	users, total, err := h.authSvc.AdminListUsers(c.Context(), page, perPage)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"code": "internal_error", "message": err.Error(),
-		})
-	}
-
-	return c.JSON(fiber.Map{
-		"users":    users,
-		"total":    total,
-		"page":     page,
-		"per_page": perPage,
-	})
-}
-
-func (h *AuthHandler) AdminGetUser(c *fiber.Ctx) error {
-	user, err := h.authSvc.GetUser(c.Context(), c.Params("id"))
-	if err != nil {
-		return handleAuthError(c, err)
-	}
-	return c.JSON(user)
-}
-
-func (h *AuthHandler) AdminUpdateUser(c *fiber.Ctx) error {
-	var req services.AdminUpdateRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid payload"})
-	}
-
-	user, err := h.authSvc.AdminUpdateUser(c.Context(), c.Params("id"), req)
-	if err != nil {
-		return handleAuthError(c, err)
-	}
-	return c.JSON(user)
-}
-
-func (h *AuthHandler) AdminDeleteUser(c *fiber.Ctx) error {
-	if err := h.authSvc.AdminDeleteUser(c.Context(), c.Params("id")); err != nil {
-		return handleAuthError(c, err)
-	}
-	return c.SendStatus(fiber.StatusNoContent)
-}
-
-func (h *AuthHandler) AdminBanUser(c *fiber.Ctx) error {
-	var body struct {
-		Banned bool `json:"banned"`
-	}
-	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid payload"})
-	}
-
-	if err := h.authSvc.AdminBanUser(c.Context(), c.Params("id"), body.Banned); err != nil {
-		return handleAuthError(c, err)
-	}
-
-	action := "banned"
-	if !body.Banned {
-		action = "unbanned"
-	}
-	return c.JSON(fiber.Map{"message": "User " + action + " successfully"})
-}
-
-func (h *AuthHandler) AdminInviteUser(c *fiber.Ctx) error {
-	var body struct {
-		Email string `json:"email"`
-	}
-	if err := c.BodyParser(&body); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid payload"})
-	}
-
-	user, err := h.authSvc.AdminInviteUser(c.Context(), body.Email)
-	if err != nil {
-		return handleAuthError(c, err)
-	}
-	return c.Status(fiber.StatusCreated).JSON(user)
-}
 
 func (h *AuthHandler) AdminGenerateLink(c *fiber.Ctx) error {
 	var body struct {
@@ -331,7 +258,7 @@ func (h *AuthHandler) ListProviders(c *fiber.Ctx) error {
 }
 
 func (h *AuthHandler) RequireAdmin(c *fiber.Ctx) error {
-	userID, role, err := h.getClaims(c)
+	userID, role, err := h.GetClaims(c)
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"code": "unauthorized", "message": "Not authenticated",
@@ -376,7 +303,7 @@ func extractUserIDFromToken(c *fiber.Ctx) string {
 	return ""
 }
 
-func (h *AuthHandler) getClaims(c *fiber.Ctx) (string, string, error) {
+func (h *AuthHandler) GetClaims(c *fiber.Ctx) (string, string, error) {
 	if userID := c.Get("X-OmniBase-User-ID"); userID != "" {
 		role := c.Get("X-OmniBase-Role")
 		if role == "" {
@@ -426,3 +353,4 @@ func urlQueryEscape(value string) string {
 	)
 	return replacer.Replace(value)
 }
+

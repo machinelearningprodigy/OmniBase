@@ -97,9 +97,15 @@ func (m *Manager) Verify(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
-// IssueAnonymousToken creates a JWT for unauthenticated (anon) requests
+// IssueAnonymousToken creates a long-lived JWT for public (anon) requests
 func (m *Manager) IssueAnonymousToken(projectID string) (string, error) {
-	return m.issue("anon", "", "anon", projectID, AccessToken, m.accessExpiry)
+	// API keys for self-hosted instances usually don't expire soon (10 years)
+	return m.issue("00000000-0000-0000-0000-000000000000", "", "anon", projectID, AccessToken, 10*365*24*time.Hour)
+}
+
+// IssueServiceRoleToken creates a long-lived JWT with master access
+func (m *Manager) IssueServiceRoleToken(projectID string) (string, error) {
+	return m.issue("00000000-0000-0000-0000-000000000000", "", "service_role", projectID, AccessToken, 10*365*24*time.Hour)
 }
 
 var (

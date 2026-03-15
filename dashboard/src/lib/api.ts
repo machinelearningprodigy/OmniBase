@@ -26,9 +26,20 @@ export function getAccessToken() {
 
 export function getHeaders(includeContentType = true) {
   const token = getAccessToken()
+  let projectId = ''
+  if (typeof localStorage !== 'undefined') {
+    const activeProject = localStorage.getItem('omnibase.active_project')
+    if (activeProject) {
+      try {
+        projectId = JSON.parse(activeProject).id
+      } catch {}
+    }
+  }
+
   return {
     ...(includeContentType ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(projectId ? { 'X-OmniBase-Project-ID': projectId } : {}),
   }
 }
 
@@ -79,11 +90,12 @@ async function refreshStoredSession() {
 
 export async function apiFetch(input: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers ?? {})
-  const token = getAccessToken()
-
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`)
-  }
+  const defaultHeaders = getHeaders(false)
+  Object.entries(defaultHeaders).forEach(([k, v]) => {
+    if (v && !headers.has(k)) {
+      headers.set(k, v)
+    }
+  })
 
   let response = await fetch(input, { ...init, headers })
   if (response.status !== 401) {
