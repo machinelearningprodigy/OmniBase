@@ -11,6 +11,11 @@
   let migrations = $state<Migration[]>([])
   let loading = $state(true)
   let error = $state<string | null>(null)
+  let expandedMigrationId = $state<number | null>(null)
+
+  function toggleExpand(id: number) {
+    expandedMigrationId = expandedMigrationId === id ? null : id
+  }
 
   async function loadMigrations() {
     try {
@@ -64,7 +69,7 @@
       <p>Once you run migrations via the SQL Editor or CLI, they will appear here.</p>
     </div>
   {:else}
-    <div class="card animate-fade-in">
+    <div class="card animate-fade-in" style="padding: 0; overflow: hidden;">
       <div class="table-wrapper">
         <table>
           <thead>
@@ -72,19 +77,32 @@
               <th style="width: 60px;">ID</th>
               <th>Name</th>
               <th>Executed At</th>
-              <th style="text-align: right;">Status</th>
+              <th style="text-align: right;">Actions</th>
             </tr>
           </thead>
           <tbody>
             {#each migrations as m}
+              {@const isExpanded = expandedMigrationId === m.id}
               <tr>
                 <td style="color: var(--text-muted); font-family: var(--font-mono);">{m.id}</td>
                 <td style="font-weight: 500;">{m.name}</td>
                 <td style="color: var(--text-secondary);">{new Date(m.executed_at).toLocaleString()}</td>
                 <td style="text-align: right;">
-                   <span class="badge badge-success">Success</span>
+                   <button class="btn btn-secondary btn-xs" onclick={() => toggleExpand(m.id)}>
+                     {isExpanded ? 'Hide SQL' : 'View SQL'}
+                   </button>
                 </td>
               </tr>
+              {#if isExpanded}
+                <tr>
+                  <td colspan="4" style="background: rgba(0,0,0,0.2); padding: 20px;">
+                    <div style="background: #050508; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 16px; position: relative;">
+                      <pre style="margin: 0; font-size: 13px; color: #86efac; overflow: auto; max-height: 400px; white-space: pre-wrap;"><code>{m.query}</code></pre>
+                      <div style="position: absolute; top: 10px; right: 10px; font-size: 10px; color: var(--text-muted); text-transform: uppercase; font-weight: 700;">SQL SOURCE</div>
+                    </div>
+                  </td>
+                </tr>
+              {/if}
             {/each}
           </tbody>
         </table>

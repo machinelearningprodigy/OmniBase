@@ -46,7 +46,7 @@
   <!-- Left: breadcrumb/project switcher -->
   <div class="flex items-center gap-2" style="flex: 1;">
     <div style="font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">
-      <span style="color: var(--text-secondary); font-weight: 500;">Project</span>
+      <span style="color: var(--text-secondary); font-weight: 500;">Schema</span>
       <select 
         bind:value={currentSchema} 
         onchange={() => switchSchema(currentSchema)}
@@ -61,7 +61,9 @@
       </select>
     </div>
     <span style="color: var(--border-default);">/</span>
-    <div style="font-size: 12px; color: var(--text-secondary);">omnibase-cloud</div>
+    <div style="font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 0.02em;">
+      {$authStore.activeProject?.name || 'Loading project...'}
+    </div>
   </div>
 
   <!-- Center: search -->

@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { getHeaders, getOmniBaseUrl, getRealtimeUrl } from '$lib/api'
   import { serviceHealth } from '$lib/stores/health'
+  import { authStore } from '$lib/stores/auth'
   import type { ServiceStatus } from '$lib/stores/health'
 
   interface StatCard {
@@ -144,9 +145,14 @@
 </svelte:head>
 
 <div class="page-header animate-fade-in">
-  <div>
-    <h1 class="page-title">Project Overview</h1>
-    <p class="page-subtitle">Welcome to OmniBase — your open-source BaaS platform</p>
+  <div style="display: flex; align-items: center; gap: 16px;">
+    <div style="width: 48px; height: 48px; border-radius: 12px; background: var(--gradient-brand); display: grid; place-items: center; font-size: 20px; font-weight: 800; color: #fff; box-shadow: 0 4px 20px rgba(108, 71, 255, 0.3);">
+      {$authStore.activeProject?.name?.[0].toUpperCase() || 'P'}
+    </div>
+    <div>
+      <h1 class="page-title">{$authStore.activeProject?.name || 'Project'} Overview</h1>
+      <p class="page-subtitle">Welcome to your OmniBase project — your backend is ready.</p>
+    </div>
   </div>
   <div class="flex gap-2">
     <a href="/database/editor" class="btn btn-secondary btn-sm">SQL Editor</a>

@@ -45,7 +45,7 @@
   --status-info: #40c4ff;
 
   /* Spacing */
-  --sidebar-width: 240px;
+  --sidebar-width: 64px;
   --topbar-height: 56px;
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -90,9 +90,10 @@ body {
 /* ─── Layout ────────────────────────────────────────────────────────────────── */
 .app-layout {
   display: grid;
-  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-columns: auto 1fr;
   grid-template-rows: var(--topbar-height) 1fr;
   height: 100vh;
+  overflow: hidden;
 }
 
 .topbar {
@@ -107,6 +108,7 @@ body {
   z-index: 100;
 }
 
+/* legacy sidebar class kept for compat */
 .sidebar {
   background: var(--gradient-sidebar);
   border-right: 1px solid var(--border-subtle);

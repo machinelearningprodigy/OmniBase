@@ -79,6 +79,7 @@ func main() {
 	api.Get("/:slug", svc.GetFunction)
 	api.Post("/", svc.RequireAdmin, svc.UpsertFunction)
 	api.Delete("/:slug", svc.RequireAdmin, svc.DeleteFunction)
+	api.Get("/:slug/logs", svc.RequireAdmin, svc.GetFunctionLogs)
 	api.All("/:slug/invoke", svc.InvokeFunction)
 
 	go func() {
@@ -108,6 +109,15 @@ func (s *Service) ensureTables(ctx context.Context) error {
 			verify_jwt BOOLEAN NOT NULL DEFAULT TRUE,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE TABLE IF NOT EXISTS omnibase.functions_logs (
+			id UUID PRIMARY KEY,
+			function_id UUID REFERENCES omnibase.functions(id) ON DELETE CASCADE,
+			status INT NOT NULL,
+			duration_ms INT NOT NULL,
+			output TEXT,
+			error TEXT,
+			executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 	`)
 	return err
@@ -237,16 +247,36 @@ func (s *Service) InvokeFunction(c *fiber.Ctx) error {
 		}
 	}
 
+	start := time.Now()
+	var status int
+	var capturedOutput string
+	var capturedError string
+
+	defer func() {
+		duration := time.Since(start).Milliseconds()
+		logID := uuid.New().String()
+		_, _ = s.db.Exec(context.Background(), `
+			INSERT INTO omnibase.functions_logs (id, function_id, status, duration_ms, output, error)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`, logID, item.ID, status, duration, truncate(capturedOutput, 1000), truncate(capturedError, 1000))
+	}()
+
 	switch item.Runtime {
 	case "static-json":
-		return serveStaticJSON(c, item)
+		status = http.StatusOK
+		if rawStatus, ok := item.Source["status"].(float64); ok {
+			status = int(rawStatus)
+		}
+		err = serveStaticJSON(c, item)
 	case "webhook":
-		return s.invokeWebhook(c, item)
+		err = s.invokeWebhook(c, item, &status, &capturedOutput, &capturedError)
 	case "javascript", "python":
-		return s.invokeProcessRuntime(c, item)
+		err = s.invokeProcessRuntime(c, item, &status, &capturedOutput, &capturedError)
 	default:
-		return c.Status(500).JSON(fiber.Map{"error": "unsupported runtime"})
+		status = 500
+		err = c.Status(500).JSON(fiber.Map{"error": "unsupported runtime"})
 	}
+	return err
 }
 
 func serveStaticJSON(c *fiber.Ctx, item *FunctionRecord) error {
@@ -265,9 +295,10 @@ func serveStaticJSON(c *fiber.Ctx, item *FunctionRecord) error {
 	return c.Status(statusCode).JSON(item.Source)
 }
 
-func (s *Service) invokeWebhook(c *fiber.Ctx, item *FunctionRecord) error {
+func (s *Service) invokeWebhook(c *fiber.Ctx, item *FunctionRecord, status *int, output *string, errStr *string) error {
 	targetURL, _ := item.Source["url"].(string)
 	if targetURL == "" {
+		*status = 500
 		return c.Status(500).JSON(fiber.Map{"error": "webhook url is not configured"})
 	}
 	method := c.Method()
@@ -277,6 +308,7 @@ func (s *Service) invokeWebhook(c *fiber.Ctx, item *FunctionRecord) error {
 
 	req, err := http.NewRequestWithContext(c.Context(), method, targetURL, bytes.NewReader(c.Body()))
 	if err != nil {
+		*status = 500
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 	c.Request().Header.VisitAll(func(k, v []byte) {
@@ -288,10 +320,13 @@ func (s *Service) invokeWebhook(c *fiber.Ctx, item *FunctionRecord) error {
 	})
 	resp, err := s.client.Do(req)
 	if err != nil {
+		*status = 502
+		*errStr = err.Error()
 		return c.Status(502).JSON(fiber.Map{"error": err.Error()})
 	}
 	defer resp.Body.Close()
 
+	*status = resp.StatusCode
 	for key, values := range resp.Header {
 		for _, value := range values {
 			c.Append(key, value)
@@ -299,14 +334,17 @@ func (s *Service) invokeWebhook(c *fiber.Ctx, item *FunctionRecord) error {
 	}
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
+		*status = 502
 		return c.Status(502).JSON(fiber.Map{"error": err.Error()})
 	}
+	*output = string(payload)
 	return c.Status(resp.StatusCode).Send(payload)
 }
 
-func (s *Service) invokeProcessRuntime(c *fiber.Ctx, item *FunctionRecord) error {
+func (s *Service) invokeProcessRuntime(c *fiber.Ctx, item *FunctionRecord, status *int, output *string, errStr *string) error {
 	workdir, err := os.MkdirTemp("", "omnibase-fn-*")
 	if err != nil {
+		*status = 500
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 	defer os.RemoveAll(workdir)
@@ -328,6 +366,7 @@ func (s *Service) invokeProcessRuntime(c *fiber.Ctx, item *FunctionRecord) error
 		cmd, err = preparePythonCommand(workdir, item.Source)
 	}
 	if err != nil {
+		*status = 500
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 
@@ -347,11 +386,17 @@ func (s *Service) invokeProcessRuntime(c *fiber.Ctx, item *FunctionRecord) error
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
+		*status = 500
+		*errStr = stderr.String()
 		return c.Status(500).JSON(fiber.Map{
 			"error":   "function execution failed",
 			"details": strings.TrimSpace(stderr.String()),
 		})
 	}
+
+	*status = 200
+	*output = stdout.String()
+	*errStr = stderr.String()
 
 	if stderr.Len() > 0 {
 		c.Set("X-OmniBase-Function-Stderr", truncate(stderr.String(), 256))
@@ -359,6 +404,7 @@ func (s *Service) invokeProcessRuntime(c *fiber.Ctx, item *FunctionRecord) error
 
 	resultBytes := bytes.TrimSpace(stdout.Bytes())
 	if len(resultBytes) == 0 {
+		*status = 204
 		return c.SendStatus(fiber.StatusNoContent)
 	}
 
@@ -483,6 +529,44 @@ func isSupportedRuntime(runtime string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Service) GetFunctionLogs(c *fiber.Ctx) error {
+	item, err := s.loadFunction(c.Context(), c.Params("slug"))
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Function not found"})
+	}
+
+	rows, err := s.db.Query(c.Context(), `
+		SELECT id::text, status, duration_ms, output, error, executed_at::text
+		FROM omnibase.functions_logs
+		WHERE function_id = $1
+		ORDER BY executed_at DESC
+		LIMIT 50
+	`, item.ID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	defer rows.Close()
+
+	type LogRecord struct {
+		ID         string `json:"id"`
+		Status     int    `json:"status"`
+		DurationMS int    `json:"duration_ms"`
+		Output     string `json:"output"`
+		Error      string `json:"error"`
+		ExecutedAt string `json:"executed_at"`
+	}
+
+	logs := make([]LogRecord, 0)
+	for rows.Next() {
+		var l LogRecord
+		if err := rows.Scan(&l.ID, &l.Status, &l.DurationMS, &l.Output, &l.Error, &l.ExecutedAt); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		logs = append(logs, l)
+	}
+	return c.JSON(logs)
 }
 
 func (s *Service) loadFunction(ctx context.Context, slug string) (*FunctionRecord, error) {
