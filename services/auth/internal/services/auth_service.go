@@ -1240,12 +1240,82 @@ func (s *AuthService) getStaticProviderConfig(provider string) *oauthProviderCon
 			UserURL:  "https://api.github.com/user",
 			Scope:    "read:user user:email",
 		}
-	case "discord":
+	case "line":
 		return &oauthProviderConfig{
-			AuthURL:  "https://discord.com/api/oauth2/authorize",
-			TokenURL: "https://discord.com/api/oauth2/token",
-			UserURL:  "https://discord.com/api/users/@me",
-			Scope:    "identify email",
+			AuthURL:  "https://access.line.me/oauth2/v2.1/authorize",
+			TokenURL: "https://api.line.me/oauth2/v2.1/token",
+			UserURL:  "https://api.line.me/v2/profile",
+			Scope:    "profile openid email",
+		}
+	case "paypal":
+		return &oauthProviderConfig{
+			AuthURL:  "https://www.paypal.com/signin/authorize",
+			TokenURL: "https://api-m.paypal.com/v1/oauth2/token",
+			UserURL:  "https://api-m.paypal.com/v1/identity/openidconnect/userinfo",
+			Scope:    "openid email profile",
+		}
+	case "amazon":
+		return &oauthProviderConfig{
+			AuthURL:  "https://www.amazon.com/ap/oa",
+			TokenURL: "https://api.amazon.com/auth/o2/token",
+			UserURL:  "https://api.amazon.com/user/profile",
+			Scope:    "profile profile:user_id",
+		}
+	case "tiktok":
+		return &oauthProviderConfig{
+			AuthURL:  "https://www.tiktok.com/v2/auth/authorize/",
+			TokenURL: "https://open.tiktokapis.com/v2/oauth/token/",
+			UserURL:  "https://open.tiktokapis.com/v2/user/info/",
+			Scope:    "user.info.basic",
+		}
+	case "pinterest":
+		return &oauthProviderConfig{
+			AuthURL:  "https://www.pinterest.com/oauth/",
+			TokenURL: "https://api.pinterest.com/v5/oauth/token",
+			UserURL:  "https://api.pinterest.com/v5/user_account",
+			Scope:    "user_accounts:read",
+		}
+	case "snapchat":
+		return &oauthProviderConfig{
+			AuthURL:  "https://accounts.snapchat.com/login/oauth2/authorize",
+			TokenURL: "https://accounts.snapchat.com/login/oauth2/access_token",
+			UserURL:  "https://kit.snapchat.com/v1/me",
+			Scope:    "https://auth.snapchat.com/oauth2/api/user.display_name",
+		}
+	case "yahoo":
+		return &oauthProviderConfig{
+			AuthURL:  "https://api.login.yahoo.com/oauth2/request_auth",
+			TokenURL: "https://api.login.yahoo.com/oauth2/get_token",
+			UserURL:  "https://api.login.yahoo.com/openid/v1/userinfo",
+			Scope:    "openid profile email",
+		}
+	case "okta":
+		return &oauthProviderConfig{
+			AuthURL:  "https://okta.com/oauth2/v1/authorize", // Placeholder, usually tenant-specific
+			TokenURL: "https://okta.com/oauth2/v1/token",     // Placeholder, usually tenant-specific
+			UserURL:  "https://okta.com/oauth2/v1/userinfo",  // Placeholder, usually tenant-specific
+			Scope:    "openid profile email",
+		}
+	case "yandex":
+		return &oauthProviderConfig{
+			AuthURL:  "https://oauth.yandex.com/authorize",
+			TokenURL: "https://oauth.yandex.com/token",
+			UserURL:  "https://login.yandex.ru/info",
+			Scope:    "login:email login:info",
+		}
+	case "wordpress":
+		return &oauthProviderConfig{
+			AuthURL:  "https://public-api.wordpress.com/oauth2/authorize",
+			TokenURL: "https://public-api.wordpress.com/oauth2/token",
+			UserURL:  "https://public-api.wordpress.com/rest/v1/me",
+			Scope:    "auth",
+		}
+	case "vk":
+		return &oauthProviderConfig{
+			AuthURL:  "https://oauth.vk.com/authorize",
+			TokenURL: "https://oauth.vk.com/access_token",
+			UserURL:  "https://api.vk.com/method/users.get",
+			Scope:    "email",
 		}
 	case "facebook":
 		return &oauthProviderConfig{
@@ -1312,6 +1382,33 @@ func (s *AuthService) exchangeOAuthCode(ctx context.Context, cfg *oauthProviderC
 		return nil, &AuthError{Code: "oauth_exchange_failed", Message: "OAuth provider did not return an access token"}
 	}
 	return &tokenResp, nil
+}
+
+func (s *AuthService) fetchOIDCUser(ctx context.Context, userURL, accessToken string) (email, providerID string, err error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, userURL, nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		Sub           string `json:"sub"`
+		Email         string `json:"email"`
+		EmailVerified bool   `json:"email_verified"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", "", err
+	}
+	if payload.Email == "" || !payload.EmailVerified {
+		// Fallback if email is not directly available or verified, use sub as a placeholder
+		if payload.Sub != "" {
+			return payload.Sub + "@oidc.invalid", payload.Sub, nil
+		}
+		return "", "", &AuthError{Code: "oauth_identity_invalid", Message: "OIDC provider did not return a verified email or sub"}
+	}
+	return payload.Email, payload.Sub, nil
 }
 
 func (s *AuthService) fetchOAuthIdentity(ctx context.Context, cfg *oauthProviderConfig, provider, accessToken string) (email, providerID string, err error) {
@@ -1410,6 +1507,162 @@ func (s *AuthService) fetchOAuthIdentity(ctx context.Context, cfg *oauthProvider
 			return "", "", err
 		}
 		return user.Email, user.ID, nil
+	case "line":
+		// Line's user info endpoint returns a profile object
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var lineUser struct {
+			UserID      string `json:"userId"`
+			DisplayName string `json:"displayName"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&lineUser); err != nil {
+			return "", "", err
+		}
+		// Line API does not directly provide email from /profile. It's usually in the ID token or requires specific scopes.
+		// For simplicity, we'll use a placeholder email.
+		return lineUser.UserID + "@line.invalid", lineUser.UserID, nil
+	case "paypal":
+		return s.fetchOIDCUser(ctx, cfg.UserURL, accessToken)
+	case "amazon":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var amz struct {
+			UserID string `json:"user_id"`
+			Email  string `json:"email"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&amz); err != nil {
+			return "", "", err
+		}
+		return amz.Email, amz.UserID, nil
+	case "tiktok":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, cfg.UserURL, strings.NewReader(`{"fields":["open_id","email"]}`))
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var tt struct {
+			Data struct {
+				User struct {
+					OpenID string `json:"open_id"`
+					Email  string `json:"email"`
+				} `json:"user"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&tt); err != nil {
+			return "", "", err
+		}
+		if tt.Data.User.Email == "" {
+			tt.Data.User.Email = tt.Data.User.OpenID + "@tiktok.invalid"
+		}
+		return tt.Data.User.Email, tt.Data.User.OpenID, nil
+	case "pinterest":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var pin struct {
+			Username string `json:"username"`
+			ID       string `json:"id"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&pin); err != nil {
+			return "", "", err
+		}
+		// Pinterest API v5 does not directly provide email in user_account endpoint.
+		// It's usually tied to specific scopes or not available.
+		return pin.Username + "@pinterest.invalid", pin.ID, nil
+	case "snapchat":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var snap struct {
+			Me struct {
+				DisplayName string `json:"displayName"`
+				ExternalID  string `json:"externalId"` // This is the stable ID
+			} `json:"me"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+			return "", "", err
+		}
+		// SnapKit does not reliably return email without particular scopes.
+		// Using externalId as providerID and a placeholder email.
+		return snap.Me.ExternalID + "@snapchat.invalid", snap.Me.ExternalID, nil
+	case "yahoo":
+		return s.fetchOIDCUser(ctx, cfg.UserURL, accessToken)
+	case "okta":
+		return s.fetchOIDCUser(ctx, cfg.UserURL, accessToken)
+	case "yandex":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL+"?format=json", nil)
+		req.Header.Set("Authorization", "OAuth "+accessToken)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var yx struct {
+			ID           string `json:"id"`
+			DefaultEmail string `json:"default_email"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&yx); err != nil {
+			return "", "", err
+		}
+		return yx.DefaultEmail, yx.ID, nil
+	case "wordpress":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var wp struct {
+			ID    int    `json:"ID"`
+			Email string `json:"email"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&wp); err != nil {
+			return "", "", err
+		}
+		return wp.Email, fmt.Sprintf("%d", wp.ID), nil
+	case "vk":
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, cfg.UserURL+"?v=5.131&access_token="+accessToken, nil)
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		defer resp.Body.Close()
+		var vk struct {
+			Response []struct {
+				ID int `json:"id"`
+			} `json:"response"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&vk); err != nil {
+			return "", "", err
+		}
+		if len(vk.Response) == 0 {
+			return "", "", &AuthError{Code: "oauth_identity_invalid", Message: "VK did not return user"}
+		}
+		// Note: VK returns email in token response, not user response usually.
+		// For simplicity, we'll use a placeholder email.
+		return fmt.Sprintf("%d@vk.invalid", vk.Response[0].ID), fmt.Sprintf("%d", vk.Response[0].ID), nil
 	default:
 		return "", "", &AuthError{Code: "unsupported_provider", Message: "Unsupported OAuth provider"}
 	}

@@ -5,385 +5,541 @@
   import { fade, slide, scale } from 'svelte/transition'
 
   interface Provider {
-    id?: string
-    name: string
-    type: string
-    client_id: string
-    client_secret: string
-    is_active: boolean
-    metadata_url?: string
+    id?: string; name: string; type: string
+    client_id: string; client_secret: string; is_active: boolean
   }
 
-  let providers = $state<Provider[]>([])
-  let loading = $state(true)
-  let saving = $state(false)
-  let error = $state<string | null>(null)
-  let success = $state<string | null>(null)
-
+  let providers        = $state<Provider[]>([])
+  let loading          = $state(false)
+  let saving           = $state(false)
+  let errorMsg         = $state<string | null>(null)
+  let successMsg       = $state<string | null>(null)
   let selectedProvider = $state<Provider | null>(null)
-  let showModal = $state(false)
+  let showModal        = $state(false)
+  let canClose         = $state(false)
+  let copySuccess      = $state(false)
 
-  const icons: Record<string, string> = {
-    google: `<svg viewBox="0 0 24 24" width="20" height="20"><path fill="#EA4335" d="M5.266 9.765A7.077 7.077 0 0 1 12 4.909c1.69 0 3.218.6 4.418 1.582L19.91 3C17.782 1.145 15.055 0 12 0 7.27 0 3.198 2.698 1.24 6.65l4.026 3.115z"/><path fill="#34A853" d="M16.04 18.013c-1.09.693-2.459 1.096-4.04 1.096-3.132 0-5.833-2.123-6.777-5.006l-4.04 3.136C3.12 21.19 7.21 24 12 24c3.15 0 5.86-1.05 7.9-2.85l-3.86-3.137z"/><path fill="#4285F4" d="M19.9 21.15c2.53-2.23 3.97-5.52 3.97-9.15 0-.82-.07-1.61-.21-2.38H12v4.51h6.68c-.29 1.56-1.17 2.87-2.5 3.75l3.72 3.27z"/><path fill="#FBBC05" d="M5.263 14.103a7.03 7.03 0 0 1 0-4.343l-4.024-3.116A11.977 11.977 0 0 0 0 12c0 1.89.44 3.666 1.22 5.253l4.043-3.15z"/></svg>`,
-    github: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>`,
-    discord: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037 19.736 19.736 0 0 0-4.885 1.515.069.069 0 0 0-.032.027C.533 9.048-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.862-1.295 1.198-1.996a.076.076 0 0 0-.041-.106 13.096 13.096 0 0 1-1.873-.894.077.077 0 0 1-.008-.128c.125-.094.252-.192.372-.29a.074.074 0 0 1 .077-.01 12.41 12.41 0 0 0 10.962 0 .074.074 0 0 1 .077.01c.12.098.246.196.372.29a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.874.894.077.077 0 0 0-.041.107c.337.7.737 1.365 1.198 1.996a.078.078 0 0 0 .084.028 20.016 20.016 0 0 0 5.994-3.03.076.076 0 0 0 .031-.056c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.027z"/></svg>`,
-    facebook: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>`,
-    microsoft: `<svg viewBox="0 0 23 23" width="20" height="20"><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg>`,
-    apple: `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M17.066 11.355c0-2.29 1.86-3.385 1.942-3.442-1.072-1.558-2.723-1.77-3.303-1.794-1.385-.141-2.712.825-3.415.825-.702 0-1.8-.797-2.964-.774-1.528.024-2.937.893-3.723 2.261-1.583 2.756-.407 6.837 1.13 9.06 0.753 1.087 1.637 2.305 2.809 2.262 1.127-.044 1.556-.728 2.915-.728 1.356 0 1.748.728 2.94.704 1.21-.02 1.97-1.107 2.716-2.197 0.865-1.258 1.22-2.474 1.242-2.536-.026-.011-2.388-.916-2.388-3.642zM14.53 4.296c.62-.751 1.037-1.794.922-2.835-.89.037-1.968.599-2.607 1.35-.572.664-1.073 1.728-.937 2.747.99.076 2.0-.51 2.622-1.262z"/></svg>`,
+  // ── Provider metadata ──────────────────────────────────────────────────────
+  const providerMeta: Record<string, { clientIdLabel: string; clientSecretLabel: string; consoleUrl: string; note: string }> = {
+    google:     { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://console.cloud.google.com/apis/credentials',  note: 'Create an OAuth 2.0 credential in Google Cloud Console' },
+    github:     { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://github.com/settings/developers',             note: 'Register an OAuth App under GitHub Developer Settings' },
+    discord:    { clientIdLabel: 'Application ID',            clientSecretLabel: 'Client Secret',               consoleUrl: 'https://discord.com/developers/applications',        note: 'Create an application at Discord Developer Portal' },
+    facebook:   { clientIdLabel: 'App ID',                    clientSecretLabel: 'App Secret',                  consoleUrl: 'https://developers.facebook.com/apps',               note: 'Create a Facebook App and enable Facebook Login' },
+    microsoft:  { clientIdLabel: 'Application (Client) ID',   clientSecretLabel: 'Client Secret Value',         consoleUrl: 'https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps', note: 'Register an app in Azure Active Directory' },
+    apple:      { clientIdLabel: 'Service ID (Client ID)',     clientSecretLabel: 'Private Key (JWT Secret)',    consoleUrl: 'https://developer.apple.com/account/resources/identifiers/list', note: 'Create a Services ID and Sign in with Apple key' },
+    twitter:    { clientIdLabel: 'API Key / Client ID',        clientSecretLabel: 'API Secret / Client Secret', consoleUrl: 'https://developer.twitter.com/en/portal/dashboard',   note: 'Create a Twitter Developer App with OAuth 2.0 enabled' },
+    linkedin:   { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://www.linkedin.com/developers/apps',           note: 'Create an app and add Sign In with LinkedIn product' },
+    spotify:    { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://developer.spotify.com/dashboard',            note: 'Create an app in Spotify Developer Dashboard' },
+    twitch:     { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://dev.twitch.tv/console/apps',                 note: 'Register an application at Twitch Developer Console' },
+    slack:      { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://api.slack.com/apps',                         note: 'Create a Slack App and add OAuth & Permissions scope' },
+    gitlab:     { clientIdLabel: 'Application ID',            clientSecretLabel: 'Secret',                      consoleUrl: 'https://gitlab.com/-/profile/applications',          note: 'Create an OAuth Application at GitLab User Settings' },
+    bitbucket:  { clientIdLabel: 'Key (Client ID)',            clientSecretLabel: 'Secret',                      consoleUrl: 'https://bitbucket.org/account/settings/app-passwords/', note: 'Create an OAuth Consumer in Bitbucket Workspace Settings' },
+    reddit:     { clientIdLabel: 'App ID (Client ID)',         clientSecretLabel: 'App Secret',                  consoleUrl: 'https://www.reddit.com/prefs/apps',                  note: 'Create a "web app" type application at Reddit Preferences' },
+    dropbox:    { clientIdLabel: 'App Key (Client ID)',        clientSecretLabel: 'App Secret',                  consoleUrl: 'https://www.dropbox.com/developers/apps',            note: 'Create an app at Dropbox App Console' },
+    zoom:       { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://marketplace.zoom.us/develop/create',         note: 'Create an OAuth app in Zoom Marketplace' },
+    notion:     { clientIdLabel: 'OAuth Client ID',            clientSecretLabel: 'OAuth Client Secret',         consoleUrl: 'https://www.notion.so/my-integrations',              note: 'Create a public integration at Notion My Integrations' },
+    atlassian:  { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://developer.atlassian.com/console/myapps/',    note: 'Create an OAuth 2.0 app at Atlassian Developer Console' },
+    salesforce: { clientIdLabel: 'Consumer Key (Client ID)',   clientSecretLabel: 'Consumer Secret',             consoleUrl: 'https://login.salesforce.com',                       note: 'Create a Connected App in Salesforce Setup → App Manager' },
+    hubspot:    { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://app.hubspot.com/developer',                  note: 'Create a Public App in HubSpot Developer Account' },
+    box:        { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://app.box.com/developers/console',             note: 'Create an OAuth 2.0 app in Box Developer Console' },
+    instagram:  { clientIdLabel: 'App ID (Client ID)',         clientSecretLabel: 'App Secret',                  consoleUrl: 'https://developers.facebook.com/apps',               note: 'Instagram Login uses the Meta (Facebook) Developer platform' },
+    line:       { clientIdLabel: 'Channel ID (Client ID)',     clientSecretLabel: 'Channel Secret',              consoleUrl: 'https://developers.line.biz/console/',               note: 'Create a LINE Login channel at LINE Developers Console' },
+    paypal:     { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://developer.paypal.com/developer/applications', note: 'Create an app in PayPal Developer Dashboard and use Sandbox for testing' },
+    amazon:     { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://developer.amazon.com/loginwithamazon/console/site/lwa/overview.html', note: 'Register an app at Login with Amazon Developer Console' },
+    tiktok:     { clientIdLabel: 'Client Key (Client ID)',     clientSecretLabel: 'Client Secret',               consoleUrl: 'https://developers.tiktok.com/apps/',                note: 'Create an app at TikTok for Developers and enable Login Kit' },
+    pinterest:  { clientIdLabel: 'App ID (Client ID)',         clientSecretLabel: 'App Secret Key',              consoleUrl: 'https://developers.pinterest.com/apps/',             note: 'Create an app at Pinterest Developer Platform' },
+    snapchat:   { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://kit.snapchat.com/apps',                      note: 'Create an app at Snap Kit for Login Kit OAuth' },
+    yahoo:      { clientIdLabel: 'Client ID (Consumer Key)',   clientSecretLabel: 'Client Secret (Consumer Secret)', consoleUrl: 'https://developer.yahoo.com/apps/',             note: 'Create a Yahoo App and enable social login with OpenID Connect' },
+    okta:       { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://developer.okta.com/',                        note: 'Create an OIDC Web Application in your Okta Admin Console' },
+    yandex:     { clientIdLabel: 'Application ID (Client ID)', clientSecretLabel: 'Password (Client Secret)',    consoleUrl: 'https://oauth.yandex.com/',                          note: 'Register an application at Yandex OAuth service' },
+    wordpress:  { clientIdLabel: 'Client ID',                 clientSecretLabel: 'Client Secret',               consoleUrl: 'https://developer.wordpress.com/apps/',              note: 'Create a WordPress.com application at the Developer Console' },
+    vk:         { clientIdLabel: 'App ID (Client ID)',         clientSecretLabel: 'Secure Key (Client Secret)',  consoleUrl: 'https://vk.com/apps?act=manage',                     note: 'Create a VK application at VK for Developers' },
   }
 
+  // ── Providers list ─────────────────────────────────────────────────────────
   const availableOAuth = [
-    { id: 'google', name: 'Google', color: '#4285F4' },
-    { id: 'github', name: 'GitHub', color: '#ffffff' },
-    { id: 'discord', name: 'Discord', color: '#5865F2' },
-    { id: 'facebook', name: 'Facebook', color: '#1877F2' },
-    { id: 'microsoft', name: 'Microsoft', color: '#00A4EF' },
-    { id: 'apple', name: 'Apple', color: '#ffffff' },
+    { id: 'google',     name: 'Google',      color: '#4285F4' },
+    { id: 'github',     name: 'GitHub',       color: '#6e40c9' },
+    { id: 'discord',    name: 'Discord',      color: '#5865F2' },
+    { id: 'facebook',   name: 'Facebook',     color: '#1877F2' },
+    { id: 'microsoft',  name: 'Microsoft',    color: '#00A4EF' },
+    { id: 'apple',      name: 'Apple',        color: '#888888' },
+    { id: 'twitter',    name: 'Twitter / X',  color: '#1d9bf0' },
+    { id: 'linkedin',   name: 'LinkedIn',     color: '#0A66C2' },
+    { id: 'spotify',    name: 'Spotify',      color: '#1DB954' },
+    { id: 'twitch',     name: 'Twitch',       color: '#9146FF' },
+    { id: 'slack',      name: 'Slack',        color: '#E01E5A' },
+    { id: 'gitlab',     name: 'GitLab',       color: '#FC6D26' },
+    { id: 'bitbucket',  name: 'Bitbucket',    color: '#0052CC' },
+    { id: 'reddit',     name: 'Reddit',       color: '#FF4500' },
+    { id: 'dropbox',    name: 'Dropbox',      color: '#0061FF' },
+    { id: 'zoom',       name: 'Zoom',         color: '#2D8CFF' },
+    { id: 'notion',     name: 'Notion',       color: '#888888' },
+    { id: 'atlassian',  name: 'Atlassian',    color: '#0052CC' },
+    { id: 'salesforce', name: 'Salesforce',   color: '#00A1E0' },
+    { id: 'hubspot',    name: 'HubSpot',      color: '#FF7A59' },
+    { id: 'box',        name: 'Box',          color: '#0061D5' },
+    { id: 'instagram',  name: 'Instagram',    color: '#E4405F' },
+    { id: 'line',       name: 'Line',         color: '#00C300' },
+    { id: 'paypal',     name: 'PayPal',       color: '#003087' },
+    { id: 'amazon',     name: 'Amazon',       color: '#FF9900' },
+    { id: 'tiktok',     name: 'TikTok',       color: '#ff0050' },
+    { id: 'pinterest',  name: 'Pinterest',    color: '#E60023' },
+    { id: 'snapchat',   name: 'Snapchat',     color: '#FFFC00' },
+    { id: 'yahoo',      name: 'Yahoo',        color: '#6001D2' },
+    { id: 'okta',       name: 'Okta',         color: '#007DC1' },
+    { id: 'yandex',     name: 'Yandex',       color: '#FC3F1D' },
+    { id: 'wordpress',  name: 'WordPress',    color: '#21759B' },
+    { id: 'vk',         name: 'VK',           color: '#4680C2' },
   ]
 
-  async function loadProviders() {
-    try {
-      loading = true
-      error = null
-      // Use apiFetch instead of raw fetch
-      const resp = await apiFetch(`${getOmniBaseUrl()}/auth/v1/admin/oauth/apps`)
-      if (resp.ok) {
-        providers = await resp.json()
-      } else {
-        error = await getErrorMessage(resp, 'Failed to load providers')
-      }
-    } catch (e) {
-      error = `Connection failed: ${e instanceof Error ? e.message : 'Unknown error'}. Ensure OmniBase Gateway is running at ${getOmniBaseUrl()}`
-    } finally {
-      loading = false
-    }
+  const iconMap: Record<string, string> = {
+    google: 'google', github: 'github', discord: 'discord', facebook: 'facebook',
+    microsoft: 'microsoft', apple: 'apple', twitter: 'x', linkedin: 'linkedin',
+    spotify: 'spotify', twitch: 'twitch', slack: 'slack', gitlab: 'gitlab',
+    bitbucket: 'bitbucket', reddit: 'reddit', dropbox: 'dropbox', zoom: 'zoom',
+    notion: 'notion', atlassian: 'atlassian', salesforce: 'salesforce', hubspot: 'hubspot',
+    box: 'box', instagram: 'instagram', line: 'line',
+    paypal: 'paypal', amazon: 'amazon', tiktok: 'tiktok', pinterest: 'pinterest',
+    snapchat: 'snapchat', yahoo: 'yahoo', okta: 'okta', yandex: 'yandex',
+    wordpress: 'wordpress', vk: 'vk',
+  }
+  function getIconUrl(id: string) {
+    return `https://unpkg.com/simple-icons@10.0.0/icons/${iconMap[id] ?? id}.svg`
   }
 
-  async function saveProvider() {
-    if (!selectedProvider) return
+  // ── API helpers ────────────────────────────────────────────────────────────
+  async function loadProviders() {
+    loading = true; errorMsg = null
     try {
-      saving = true
-      error = null
-      success = null
+      const resp = await apiFetch(`${getOmniBaseUrl()}/auth/v1/admin/oauth/apps`)
+      providers = resp.ok ? (Array.isArray(await resp.json()) ? await resp.json() : []) : []
+    } catch { providers = [] }
+    finally { loading = false }
+  }
+
+  async function saveProvider(e: Event) {
+    e.preventDefault()
+    if (!selectedProvider) return
+    saving = true; errorMsg = null
+    try {
       const resp = await apiFetch(`${getOmniBaseUrl()}/auth/v1/admin/oauth/apps`, {
         method: 'POST',
-        body: JSON.stringify(selectedProvider)
+        body: JSON.stringify(selectedProvider),
       })
       if (resp.ok) {
-        success = `${selectedProvider.name.toUpperCase()} identity updated`
-        showModal = false
+        const label = availableOAuth.find(a => a.id === selectedProvider!.name)?.name ?? selectedProvider!.name
+        successMsg = `${label} saved successfully`
+        closeModal()
         await loadProviders()
       } else {
-        error = await getErrorMessage(resp, 'Failed to save configuration')
+        errorMsg = await getErrorMessage(resp, 'Failed to save')
       }
-    } catch (e) {
-      error = 'Request failed'
-    } finally {
-      saving = false
-    }
+    } catch { errorMsg = 'Network error — OmniBase gateway may be offline' }
+    finally { saving = false }
   }
 
-  function openConfig(id: string) {
+  // ── Modal helpers ──────────────────────────────────────────────────────────
+  function openConfig(e: MouseEvent, id: string) {
+    e.preventDefault(); e.stopPropagation()
     const existing = providers.find(p => p.name.toLowerCase() === id)
-    selectedProvider = {
-      name: id,
-      type: 'oauth',
-      client_id: existing?.client_id || '',
-      client_secret: existing?.client_secret || '',
-      is_active: existing?.is_active ?? true
+    selectedProvider = { name: id, type: 'oauth', client_id: existing?.client_id ?? '', client_secret: existing?.client_secret ?? '', is_active: existing?.is_active ?? true }
+    showModal = true; canClose = false
+    setTimeout(() => { canClose = true }, 300)
+  }
+
+  function closeModal() {
+    if (!canClose) return
+    showModal = false; selectedProvider = null; errorMsg = null
+  }
+
+  function handleOverlayClick(e: MouseEvent) {
+    if (!canClose) return
+    if ((e.target as HTMLElement) === (e.currentTarget as HTMLElement)) {
+      showModal = false; selectedProvider = null; errorMsg = null
     }
-    showModal = true
   }
 
-  onMount(loadProviders)
-
-  function isConfigured(id: string) {
-    return providers.some(p => p.name.toLowerCase() === id && p.client_id)
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && showModal && canClose) {
+      showModal = false; selectedProvider = null; errorMsg = null
+    }
   }
 
-  function isActive(id: string) {
-    return providers.find(p => p.name.toLowerCase() === id)?.is_active ?? false
-  }
+  function isConfigured(id: string) { return providers.some(p => p.name.toLowerCase() === id && p.client_id) }
+  function isActive(id: string)     { return providers.find(p => p.name.toLowerCase() === id)?.is_active ?? false }
 
-  let copySuccess = $state(false)
   async function copyToClipboard(text: string) {
-    await navigator.clipboard.writeText(text)
-    copySuccess = true
-    setTimeout(() => copySuccess = false, 2000)
+    try { await navigator.clipboard.writeText(text) } catch { return }
+    copySuccess = true; setTimeout(() => { copySuccess = false }, 2000)
   }
+
+  onMount(() => { loadProviders() })
+
+  let meta         = $derived(selectedProvider ? (providerMeta[selectedProvider.name] ?? providerMeta.google)  : null)
+  let selectedInfo = $derived(selectedProvider ? availableOAuth.find(a => a.id === selectedProvider!.name) : null)
+  let callbackUrl  = $derived(selectedProvider ? `${getOmniBaseUrl()}/auth/v1/callback?provider=${selectedProvider.name}` : '')
+
+  // Configured count
+  let configuredCount = $derived(availableOAuth.filter(a => isConfigured(a.id)).length)
+  let activeCount     = $derived(availableOAuth.filter(a => isConfigured(a.id) && isActive(a.id)).length)
 </script>
 
-<svelte:head>
-  <title>Auth Settings — OmniBase</title>
-</svelte:head>
+<svelte:window onkeydown={handleKeydown} />
+<svelte:head><title>Identity Providers — OmniBase</title></svelte:head>
 
-<main class="page-container" transition:fade>
-  <header class="header">
-    <div class="breadcrumb">Settings / <span class="highlight">Authentication</span></div>
-    <div class="header-row">
-      <div>
-        <h1 class="title">Identity Providers</h1>
-        <p class="subtitle">Enable social login and manage OAuth configuration.</p>
+<!-- ── Page ──────────────────────────────────────────────────────────────────── -->
+<div class="ip-page">
+
+  <!-- Header -->
+  <div class="ip-top">
+    <div>
+      <div class="ip-breadcrumb">Settings / <span>Authentication</span></div>
+      <h1 class="ip-title">Identity Providers</h1>
+      <p class="ip-sub">Enable social logins and manage OAuth for your project.</p>
+    </div>
+    <div class="ip-top-r">
+      <!-- Stats -->
+      <div class="ip-stat-row">
+        <div class="ip-stat">
+          <div class="ip-stat-n">{availableOAuth.length}</div>
+          <div class="ip-stat-l">Providers</div>
+        </div>
+        <div class="ip-stat-div"></div>
+        <div class="ip-stat">
+          <div class="ip-stat-n">{configuredCount}</div>
+          <div class="ip-stat-l">Configured</div>
+        </div>
+        <div class="ip-stat-div"></div>
+        <div class="ip-stat">
+          <div class="ip-stat-n st-on">{activeCount}</div>
+          <div class="ip-stat-l">Active</div>
+        </div>
       </div>
-      <button class="btn-refresh {loading ? 'spinning' : ''}" onclick={loadProviders}>
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      <button type="button" class="ip-refresh" class:spinning={loading} onclick={(e) => { e.stopPropagation(); loadProviders() }} title="Refresh">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M23 4v6h-6M1 20v-6h6"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
       </button>
     </div>
-  </header>
+  </div>
 
-  {#if error}
-    <div class="toast error" transition:slide>
-      <div class="toast-content">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <span>{error}</span>
-      </div>
-      <button class="toast-close" onclick={() => error = null}>&times;</button>
+  <!-- Toast -->
+  {#if successMsg}
+    <div class="ip-toast ip-ok" transition:slide={{ duration: 180 }}>
+      <span class="ip-tt"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>{successMsg}</span>
+      <button type="button" class="ip-tx" onclick={() => { successMsg = null }}>✕</button>
     </div>
   {/if}
 
-  {#if success}
-    <div class="toast success" transition:slide>
-      <div class="toast-content">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-        <span>{success}</span>
-      </div>
-      <button class="toast-close" onclick={() => success = null}>&times;</button>
-    </div>
-  {/if}
+  <!-- Section label + search hint -->
+  <div class="ip-sec-row">
+    <div class="ip-sec-label">External Providers — {availableOAuth.length} available</div>
+    <div class="ip-sec-hint">Click any provider to configure it</div>
+  </div>
 
-  <div class="section-label">External Providers</div>
-  <div class="provider-grid">
-    {#each availableOAuth as item}
+  <!-- Grid -->
+  <div class="ip-grid">
+    {#each availableOAuth as item (item.id)}
       {@const configured = isConfigured(item.id)}
-      {@const active = isActive(item.id)}
-      <button class="card {configured ? 'configured' : ''}" onclick={() => openConfig(item.id)}>
-        <div class="card-main">
-          <div class="card-icon" style="--icon-color: {item.color}">
-            {@html icons[item.id]}
+      {@const active     = isActive(item.id)}
+      <button
+        type="button"
+        class="ip-card"
+        class:ip-configured={configured}
+        style="--brand: {item.color}"
+        onclick={(e) => openConfig(e, item.id)}
+      >
+        <!-- Colorful icon -->
+        <div class="ip-card-l">
+          <div class="ip-icon-box" style="background: {item.color}20; border-color: {item.color}40;">
+            <img src={getIconUrl(item.id)} alt={item.name} class="ip-icon" style="filter: brightness(0) saturate(100%) invert(1);" />
             {#if configured && active}
-              <div class="status-indicator"></div>
+              <span class="ip-dot" style="border-color: var(--card-bg, #0d0d12)"></span>
             {/if}
           </div>
-          <div class="card-text">
-            <div class="provider-name">{item.name}</div>
-            <div class="provider-status {configured ? (active ? 'on' : 'paused') : 'off'}">
-              {configured ? (active ? 'Enabled' : 'Paused') : 'Setup Needed'}
+          <div>
+            <div class="ip-card-name">{item.name}</div>
+            <div class="ip-card-st" class:st-on={configured && active} class:st-pause={configured && !active} class:st-off={!configured}>
+              {configured ? (active ? '● Active' : '● Paused') : 'Setup Needed'}
             </div>
           </div>
         </div>
-        <div class="card-action">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 18 15 12 9 6"/></svg>
+        <!-- Right: status pill + chevron -->
+        <div class="ip-card-r">
+          {#if configured}
+            <span class="ip-pill" class:ip-pill-on={active} class:ip-pill-off={!active}>{active ? 'On' : 'Off'}</span>
+          {/if}
+          <svg class="ip-chev" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
         </div>
       </button>
     {/each}
   </div>
 
-  <div class="guide-box" transition:fade={{ delay: 100 }}>
-    <div class="guide-header">
-       <div class="guide-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div>
-       <div class="guide-titles">
-         <h3>Authorization Endpoint</h3>
-         <p>Standard URL to initiate login from your client apps.</p>
-       </div>
-    </div>
-    <div class="code-bar">
-      <code class="code">
-        {getOmniBaseUrl()}/auth/v1/authorize?provider=google&project_id={$authStore.activeProject?.id || '...'}&redirect_to=YOUR_APP_URL
-      </code>
-      <button class="copy-btn {copySuccess ? 'copied' : ''}" onclick={() => copyToClipboard(`${getOmniBaseUrl()}/auth/v1/authorize?provider=google&project_id=${$authStore.activeProject?.id || 'PROJECT_ID'}&redirect_to=https://yourapp.com`)}>
-        {#if copySuccess}<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>{:else}<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>{/if}
-      </button>
-    </div>
-    <p class="guide-note">Whitelist your <code>redirect_to</code> domain in the provider's developer console.</p>
-  </div>
-</main>
-
-{#if showModal && selectedProvider}
-  <div class="modal-overlay" onclick={() => showModal = false} transition:fade={{ duration: 150 }}>
-    <div class="modal-content" onclick={e => e.stopPropagation()} in:scale={{ start: 0.98, duration: 200 }}>
-      <header class="modal-header">
-        <div class="header-info">
-          <div class="id-icon" style="background: {availableOAuth.find(a => a.id === selectedProvider?.name)?.color}10; color: {availableOAuth.find(a => a.id === selectedProvider?.name)?.color}">
-            {@html icons[selectedProvider.name]}
-          </div>
-          <div>
-            <h2>{selectedProvider.name.toUpperCase()} Config</h2>
-            <p>Enter your application credentials below.</p>
-          </div>
+  <!-- Guide box -->
+  <div class="ip-guide">
+    <div class="ip-guide-bar"></div>
+    <div class="ip-guide-inner">
+      <div class="ip-guide-left">
+        <div class="ip-guide-ic">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
         </div>
-        <button class="modal-close" onclick={() => showModal = false}>&times;</button>
-      </header>
-
-      <div class="modal-body">
-        <div class="form-field">
-          <label for="c-id">Client ID</label>
-          <input type="text" id="c-id" bind:value={selectedProvider.client_id} placeholder="Public identifier from provider..." />
-        </div>
-        <div class="form-field">
-          <label for="c-sec">Client Secret</label>
-          <div class="password-wrap">
-            <input type="password" id="c-sec" bind:value={selectedProvider.client_secret} placeholder="••••••••••••••••" />
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5z"/></svg>
-          </div>
-        </div>
-
-        <div class="divider"></div>
-
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <div class="toggle-title">Status</div>
-            <div class="toggle-desc">Allow users to use this provider</div>
-          </div>
-          <label class="switch">
-            <input type="checkbox" bind:checked={selectedProvider.is_active} />
-            <span class="slider"></span>
-          </label>
+        <div>
+          <div class="ip-guide-title">Authorization Endpoint</div>
+          <div class="ip-guide-sub">Use this URL in your app button to start the social login flow.</div>
         </div>
       </div>
+    </div>
+    <div class="ip-code-row">
+      <code class="ip-code">{getOmniBaseUrl()}/auth/v1/authorize?provider=google&project_id={$authStore.activeProject?.id ?? 'PROJECT_ID'}&redirect_to=https://yourapp.com</code>
+      <button type="button" class="ip-copy" class:ip-copy-ok={copySuccess}
+        onclick={(e) => { e.stopPropagation(); copyToClipboard(`${getOmniBaseUrl()}/auth/v1/authorize?provider=google&project_id=${$authStore.activeProject?.id ?? 'YOUR_PROJECT_ID'}&redirect_to=https://yourapp.com`) }}>
+        {#if copySuccess}
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+        {:else}
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        {/if}
+      </button>
+    </div>
+    <p class="ip-guide-note">Replace <code>google</code> with any provider ID. Whitelist your <code>redirect_to</code> in the provider's developer console.</p>
+  </div>
+</div>
 
-      <footer class="modal-footer">
-        <button class="btn-ghost" onclick={() => showModal = false}>Cancel</button>
-        <button class="btn-primary" onclick={saveProvider} disabled={saving}>
-          {saving ? 'Saving...' : 'Save Configuration'}
+<!-- ── Modal ─────────────────────────────────────────────────────────────────── -->
+{#if showModal && selectedProvider && meta && selectedInfo}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="ip-overlay" onclick={handleOverlayClick} transition:fade={{ duration: 150 }}>
+    <div class="ip-modal" onclick={(e) => e.stopPropagation()} in:scale={{ start: 0.96, duration: 180 }}>
+      <!-- color accent strip at top -->
+      <div class="ip-modal-strip" style="background: linear-gradient(90deg, {selectedInfo.color}, {selectedInfo.color}88)"></div>
+
+      <div class="ip-mhead">
+        <div class="ip-mhead-l">
+          <div class="ip-micon" style="background: {selectedInfo.color}20; border-color: {selectedInfo.color}50;">
+            <img src={getIconUrl(selectedProvider.name)} alt={selectedInfo.name} class="ip-icon" style="width:26px;height:26px;filter:brightness(0) invert(1);" />
+          </div>
+          <div>
+            <div class="ip-mtitle">{selectedInfo.name}</div>
+            <div class="ip-msub">OAuth 2.0 Provider Configuration</div>
+          </div>
+        </div>
+        <button type="button" class="ip-mclose" onclick={() => { canClose = true; closeModal() }}>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
-      </footer>
+      </div>
+
+      {#if meta.note}
+        <div class="ip-setup-note">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span>{meta.note}.
+            <a href={meta.consoleUrl} target="_blank" rel="noreferrer" class="ip-link">Open {selectedInfo.name} Console ↗</a>
+          </span>
+        </div>
+      {/if}
+
+      <form class="ip-mbody" onsubmit={saveProvider}>
+        <!-- Callback URL -->
+        <div class="ip-field">
+          <label class="ip-label">Callback / Redirect URI
+            <span class="ip-tag">➡ Add this URL to the provider's console</span>
+          </label>
+          <div class="ip-code-row" style="margin-bottom:0">
+            <code class="ip-code">{callbackUrl}</code>
+            <button type="button" class="ip-copy" onclick={(e) => { e.stopPropagation(); copyToClipboard(callbackUrl) }}>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="ip-field">
+          <label for="ip-cid" class="ip-label">{meta.clientIdLabel}</label>
+          <input id="ip-cid" type="text" class="ip-input" bind:value={selectedProvider.client_id} placeholder="Paste from {selectedInfo.name} developer console…" autocomplete="off" spellcheck="false" />
+        </div>
+
+        <div class="ip-field">
+          <label for="ip-csec" class="ip-label">{meta.clientSecretLabel}</label>
+          <input id="ip-csec" type="password" class="ip-input" bind:value={selectedProvider.client_secret} placeholder="Paste your secret…" autocomplete="new-password" />
+          <p class="ip-hint">Stored encrypted server-side — never exposed to client apps.</p>
+        </div>
+
+        <div class="ip-divider"></div>
+
+        <div class="ip-toggle-row">
+          <div>
+            <div class="ip-toggle-title">Enable Provider</div>
+            <div class="ip-toggle-sub">Allow users to sign in with {selectedInfo.name}</div>
+          </div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
+          <label class="ip-switch">
+            <input type="checkbox" bind:checked={selectedProvider.is_active} />
+            <span class="ip-slider" style="--sw-on:{selectedInfo.color}"></span>
+          </label>
+        </div>
+
+        {#if errorMsg && showModal}
+          <div class="ip-merr" transition:slide={{ duration: 130 }}>{errorMsg}</div>
+        {/if}
+
+        <div class="ip-mfoot">
+          <button type="button" class="ip-btn-ghost" onclick={() => { canClose = true; closeModal() }}>Cancel</button>
+          <button type="submit" class="ip-btn-save" disabled={saving} style="background:{selectedInfo.color};box-shadow:0 4px 14px {selectedInfo.color}44">
+            {#if saving}<span class="ip-spin-sm"></span> Saving…{:else}Save Configuration{/if}
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 {/if}
 
 <style>
-  :global(:root) {
-    --primary: #6c47ff;
-    --primary-dim: rgba(108, 71, 255, 0.1);
-    --bg: #050507;
-    --card: #0c0c11;
-    --card-hover: #14141d;
-    --border: rgba(255, 255, 255, 0.08);
-    --text-sec: #8d8d9f;
-    --text-prim: #ffffff;
-  }
+  /* ── Page fills content area fully ── */
+  .ip-page { padding: 32px; width: 100%; font-family: 'Inter', system-ui, sans-serif; }
 
-  .page-container {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 40px 24px;
-    font-family: 'Inter', system-ui, sans-serif;
-    color: var(--text-prim);
-  }
+  /* ── Header ── */
+  .ip-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 32px; flex-wrap: wrap; }
+  .ip-breadcrumb { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: #52525b; margin-bottom: 8px; }
+  .ip-breadcrumb span { color: #a78bfa; }
+  .ip-title { font-size: 28px; font-weight: 800; letter-spacing: -.03em; color: #f4f4f5; margin: 0 0 6px; }
+  .ip-sub   { font-size: 14px; color: #71717a; margin: 0; }
 
-  .breadcrumb { font-size: 11px; font-weight: 700; color: var(--text-sec); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px; }
-  .breadcrumb .highlight { color: var(--primary); }
+  /* Top-right: stats + refresh */
+  .ip-top-r { display: flex; align-items: center; gap: 16px; }
+  .ip-stat-row { display: flex; align-items: center; gap: 16px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; padding: 12px 20px; }
+  .ip-stat { text-align: center; }
+  .ip-stat-n { font-size: 20px; font-weight: 800; color: #f4f4f5; line-height: 1; }
+  .ip-stat-l { font-size: 11px; color: #52525b; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-top: 3px; }
+  .ip-stat-div { width: 1px; height: 32px; background: rgba(255,255,255,.08); }
+  .st-on { color: #4ade80 !important; }
 
-  .header-row { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 40px; }
-  .title { font-size: 32px; font-weight: 850; letter-spacing: -0.03em; margin: 0 0 4px; }
-  .subtitle { font-size: 15px; color: var(--text-sec); margin: 0; }
+  /* Refresh */
+  .ip-refresh { width: 38px; height: 38px; border-radius: 10px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.1); color: #71717a; cursor: pointer; display: grid; place-items: center; transition: .18s; }
+  .ip-refresh:hover { background: rgba(255,255,255,.09); color: #fff; border-color: rgba(255,255,255,.2); }
+  .ip-refresh.spinning svg { animation: ipspin .8s linear infinite; }
+  @keyframes ipspin { to { transform: rotate(360deg); } }
 
-  .btn-refresh {
-    width: 38px; height: 38px; border-radius: 12px;
-    background: var(--card); border: 1px solid var(--border);
-    color: var(--text-sec); cursor: pointer; display: grid; place-items: center;
-    transition: 0.2s;
-  }
-  .btn-refresh:hover { color: #fff; background: var(--card-hover); border-color: rgba(255,255,255,0.2); }
-  .btn-refresh.spinning svg { animation: spin 0.8s linear infinite; }
-  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  /* ── Toast ── */
+  .ip-toast { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-radius: 12px; margin-bottom: 24px; font-size: 14px; font-weight: 500; border: 1px solid transparent; }
+  .ip-ok  { background: rgba(34,197,94,.08); border-color: rgba(34,197,94,.2); color: #86efac; }
+  .ip-tt  { display: flex; align-items: center; gap: 9px; }
+  .ip-tx  { background: none; border: none; color: inherit; font-size: 15px; cursor: pointer; opacity: .6; }
+  .ip-tx:hover { opacity: 1; }
 
-  /* Toasts */
-  .toast {
+  /* ── Section row ── */
+  .ip-sec-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .ip-sec-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: #3f3f46; }
+  .ip-sec-hint  { font-size: 12px; color: #3f3f46; }
+
+  /* ── Grid — 4 columns, fills space ── */
+  .ip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-bottom: 36px; }
+
+  /* ── Provider card ── */
+  .ip-card {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; border-radius: 12px; margin-bottom: 24px;
-    border: 1px solid transparent; font-size: 13px; font-weight: 600;
+    padding: 13px 14px; border-radius: 12px; text-align: left; cursor: pointer;
+    background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.07);
+    transition: all .18s cubic-bezier(.4,0,.2,1); position: relative; overflow: hidden;
   }
-  .toast.error { background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.2); color: #f87171; }
-  .toast.success { background: rgba(34, 197, 94, 0.08); border-color: rgba(34, 197, 94, 0.2); color: #4ade80; }
-  .toast-content { display: flex; align-items: center; gap: 10px; }
-  .toast-close { background: none; border: none; color: inherit; font-size: 18px; cursor: pointer; opacity: 0.5; }
+  /* Left brand accent line */
+  .ip-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--brand); opacity: 0; transition: opacity .2s; border-radius: 12px 0 0 12px; }
+  .ip-card:hover { background: rgba(255,255,255,.055); border-color: rgba(255,255,255,.18); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.3); }
+  .ip-card:hover::before { opacity: 1; }
+  .ip-configured { border-color: rgba(108,71,255,.35); background: rgba(108,71,255,.04); }
+  .ip-configured::before { opacity: .7; }
 
-  /* Grid */
-  .section-label { font-size: 12px; font-weight: 800; color: var(--text-sec); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px; }
-  .provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 40px; }
+  .ip-card-l { display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0; }
 
-  .card {
-    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-    padding: 14px; display: flex; align-items: center; justify-content: space-between;
-    transition: 0.2s; cursor: pointer; text-align: left;
-  }
-  .card:hover { border-color: rgba(255,255,255,0.15); background: var(--card-hover); transform: translateY(-1px); }
-  .card.configured { border-color: rgba(108, 71, 255, 0.2); }
+  /* Colorful icon box */
+  .ip-icon-box { width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0; border: 1px solid transparent; display: grid; place-items: center; position: relative; }
+  .ip-icon { width: 18px; height: 18px; object-fit: contain; display: block; }
 
-  .card-main { display: flex; align-items: center; gap: 12px; }
-  .card-icon {
-    width: 36px; height: 36px; border-radius: 10px; background: rgba(255,255,255,0.03);
-    display: grid; place-items: center; position: relative; color: var(--icon-color);
-  }
-  .status-indicator {
-    position: absolute; top: -2px; right: -2px; width: 7px; height: 7px;
-    background: #4ade80; border-radius: 50%; border: 1.5px solid var(--card);
-  }
-  .provider-name { font-size: 14px; font-weight: 700; }
-  .provider-status { font-size: 11px; font-weight: 600; margin-top: 1px; }
-  .provider-status.on { color: #4ade80; }
-  .provider-status.paused { color: #facc15; }
-  .provider-status.off { color: var(--text-sec); opacity: 0.5; }
+  .ip-dot { position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%; background: #4ade80; border: 2px solid; box-shadow: 0 0 6px rgba(74,222,128,.6); }
 
-  .card-action { opacity: 0.2; transition: 0.2s; transform: translateX(-4px); }
-  .card:hover .card-action { opacity: 0.6; transform: translateX(0); }
+  .ip-card-name { font-size: 13px; font-weight: 600; color: #f4f4f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ip-card-st   { font-size: 11px; font-weight: 500; margin-top: 2px; }
+  .st-on    { color: #4ade80; }
+  .st-pause { color: #facc15; }
+  .st-off   { color: #52525b; }
 
-  /* Guide */
-  .guide-box { background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 24px; }
-  .guide-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
-  .guide-icon { width: 38px; height: 38px; background: var(--primary); border-radius: 12px; display: grid; place-items: center; color: #fff; }
-  .guide-titles h3 { font-size: 16px; font-weight: 800; margin: 0 0 2px; }
-  .guide-titles p { font-size: 13px; color: var(--text-sec); margin: 0; }
+  .ip-card-r { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 6px; }
+  .ip-pill { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 8px; letter-spacing: .04em; text-transform: uppercase; }
+  .ip-pill-on  { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid rgba(74,222,128,.25); }
+  .ip-pill-off { background: rgba(250,204,21,.08); color: #facc15; border: 1px solid rgba(250,204,21,.2); }
+  .ip-chev { color: #3f3f46; transition: .18s; transform: translateX(-3px); }
+  .ip-card:hover .ip-chev { color: #a78bfa; transform: translateX(0); }
 
-  .code-bar {
-    background: #000; border: 1px solid var(--border); border-radius: 12px;
-    padding: 6px 6px 6px 14px; display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
-  }
-  .code { flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9aa5ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .copy-btn {
-    width: 30px; height: 30px; border-radius: 8px; background: #111; border: 1px solid var(--border);
-    color: var(--text-sec); cursor: pointer; display: grid; place-items: center; transition: 0.2s;
-  }
-  .copy-btn:hover { background: #222; color: #fff; }
-  .copy-btn.copied { background: rgba(34, 197, 94, 0.1); color: #4ade80; border-color: #059669; }
-  .guide-note { font-size: 12px; color: var(--text-sec); margin: 0; }
-  .guide-note code { color: #f87171; background: rgba(248, 113, 113, 0.05); padding: 1px 4px; border-radius: 4px; }
+  /* ── Guide ── */
+  .ip-guide { background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; padding: 22px; position: relative; overflow: hidden; }
+  .ip-guide-bar { position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg,#6c47ff,#a78bfa); }
+  .ip-guide-inner { margin-bottom: 16px; }
+  .ip-guide-left { display: flex; align-items: center; gap: 13px; }
+  .ip-guide-ic { width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0; background: rgba(108,71,255,.12); border: 1px solid rgba(108,71,255,.25); display: grid; place-items: center; color: #a78bfa; }
+  .ip-guide-title { font-size: 15px; font-weight: 700; color: #f4f4f5; }
+  .ip-guide-sub   { font-size: 13px; color: #71717a; margin-top: 2px; }
+  .ip-guide-note  { font-size: 12px; color: #52525b; line-height: 1.7; }
+  .ip-guide-note code { color: #f87171; background: rgba(248,113,113,.1); padding: 1px 5px; border-radius: 4px; }
 
-  /* Modal */
-  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(10px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; }
-  .modal-content { width: 100%; max-width: 420px; background: #0a0a0e; border: 1px solid rgba(255,255,255,0.12); border-radius: 24px; overflow: hidden; }
+  /* ── Code row ── */
+  .ip-code-row { background: #09090c; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 8px 8px 8px 13px; display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .ip-code { flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #818cf8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: none; padding: 0; }
+  .ip-copy { flex-shrink: 0; width: 30px; height: 30px; border-radius: 7px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09); color: #71717a; cursor: pointer; display: grid; place-items: center; transition: .18s; }
+  .ip-copy:hover { background: rgba(255,255,255,.1); color: #fff; }
+  .ip-copy-ok { background: rgba(34,197,94,.12) !important; color: #4ade80 !important; border-color: rgba(34,197,94,.3) !important; }
 
-  .modal-header { padding: 24px; display: flex; justify-content: space-between; align-items: flex-start; }
-  .header-info { display: flex; gap: 16px; align-items: center; }
-  .id-icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; }
-  .modal-header h2 { font-size: 18px; font-weight: 850; margin: 0 0 2px; }
-  .modal-header p { font-size: 13px; color: var(--text-sec); margin: 0; }
-  .modal-close { background: none; border: none; font-size: 24px; color: var(--text-sec); cursor: pointer; padding: 0 8px; align-self: flex-start; }
+  /* ── Overlay ── */
+  .ip-overlay { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,.8); backdrop-filter: blur(10px); display: flex; align-items: center; justify-content: center; padding: 20px; }
 
-  .modal-body { padding: 0 24px 24px; }
-  .form-field { margin-bottom: 20px; }
-  .form-field label { display: block; font-size: 12px; font-weight: 700; color: var(--text-sec); margin-bottom: 8px; text-transform: uppercase; }
-  .form-field input { width: 100%; background: #000; border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; color: #fff; font-size: 14px; transition: border-color 0.2s; }
-  .form-field input:focus { border-color: var(--primary); outline: none; }
-  .password-wrap { position: relative; }
-  .password-wrap svg { position: absolute; right: 14px; top: 50%; translate: 0 -50%; opacity: 0.2; }
+  /* ── Modal ── */
+  .ip-modal { width: 100%; max-width: 500px; background: #0d0d12; border: 1px solid rgba(255,255,255,.14); border-radius: 20px; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.7); max-height: 92vh; overflow-y: auto; }
+  .ip-modal-strip { height: 4px; }
 
-  .divider { height: 1px; background: var(--border); margin: 24px 0; }
+  /* Modal head */
+  .ip-mhead { padding: 20px 22px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,.07); }
+  .ip-mhead-l { display: flex; align-items: center; gap: 13px; }
+  .ip-micon { width: 46px; height: 46px; border-radius: 12px; flex-shrink: 0; border: 1px solid transparent; display: grid; place-items: center; }
+  .ip-mtitle { font-size: 18px; font-weight: 700; color: #f4f4f5; }
+  .ip-msub   { font-size: 12px; color: #71717a; margin-top: 2px; }
+  .ip-mclose { background: none; border: none; color: #52525b; cursor: pointer; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; transition: .15s; }
+  .ip-mclose:hover { color: #fff; background: rgba(255,255,255,.08); }
 
-  .toggle-row { display: flex; align-items: center; justify-content: space-between; }
-  .toggle-title { font-size: 15px; font-weight: 700; color: #fff; }
-  .toggle-desc { font-size: 12px; color: var(--text-sec); }
+  /* Setup note */
+  .ip-setup-note { display: flex; align-items: flex-start; gap: 9px; background: rgba(108,71,255,.07); border: 1px solid rgba(108,71,255,.2); border-radius: 10px; padding: 11px 14px; margin: 14px 22px 0; font-size: 13px; color: #c4b5fd; line-height: 1.5; }
+  .ip-link { color: #a78bfa; text-decoration: underline; font-weight: 600; }
+  .ip-link:hover { color: #c4b5fd; }
 
-  .switch { position: relative; width: 42px; height: 22px; }
-  .switch input { opacity: 0; width: 0; height: 0; }
-  .slider { position: absolute; inset: 0; background: #27272a; border-radius: 22px; transition: 0.3s; cursor: pointer; }
-  .slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.3s; }
-  input:checked + .slider { background: var(--primary); }
-  input:checked + .slider::before { transform: translateX(20px); }
+  /* Modal body */
+  .ip-mbody { padding: 18px 22px 0; }
+  .ip-field { margin-bottom: 16px; }
+  .ip-label { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; color: #71717a; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 7px; }
+  .ip-tag { text-transform: none; font-weight: 500; font-size: 10.5px; background: rgba(251,191,36,.1); color: #fbbf24; padding: 2px 7px; border-radius: 5px; letter-spacing: 0; }
+  .ip-input { width: 100%; padding: 10px 13px; border-radius: 10px; background: #060608; border: 1px solid rgba(255,255,255,.12); color: #f4f4f5; font-size: 14px; font-family: inherit; outline: none; transition: border-color .18s, box-shadow .18s; }
+  .ip-input:focus { border-color: #6c47ff; box-shadow: 0 0 0 3px rgba(108,71,255,.18); }
+  .ip-input::placeholder { color: #3f3f46; }
+  .ip-hint { font-size: 11.5px; color: #3f3f46; margin-top: 5px; }
 
-  .modal-footer { padding: 20px 24px; background: rgba(255,255,255,0.015); border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 12px; }
-  .btn-ghost { background: none; border: none; color: var(--text-sec); font-weight: 700; cursor: pointer; padding: 10px 16px; border-radius: 10px; }
-  .btn-primary { background: var(--primary); color: #fff; border: none; font-weight: 800; font-size: 14px; padding: 10px 20px; border-radius: 12px; cursor: pointer; transition: 0.2s; }
-  .btn-primary:hover { transform: translateY(-1px); background: #7d5fff; }
+  .ip-divider { height: 1px; background: rgba(255,255,255,.07); margin: 14px 0; }
+
+  /* Toggle */
+  .ip-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; border-radius: 12px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06); margin-bottom: 14px; }
+  .ip-toggle-title { font-size: 13px; font-weight: 600; color: #e4e4e7; }
+  .ip-toggle-sub   { font-size: 11.5px; color: #52525b; margin-top: 2px; }
+  .ip-switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+  .ip-switch input { opacity: 0; width: 0; height: 0; }
+  .ip-slider { position: absolute; inset: 0; background: #3f3f46; border-radius: 24px; cursor: pointer; transition: .27s; }
+  .ip-slider::before { content: ''; position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .27s; }
+  .ip-switch input:checked + .ip-slider { background: var(--sw-on, #6c47ff); }
+  .ip-switch input:checked + .ip-slider::before { transform: translateX(20px); }
+
+  /* Modal error */
+  .ip-merr { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.2); color: #fca5a5; font-size: 13px; padding: 10px 14px; border-radius: 10px; margin-bottom: 12px; }
+
+  /* Modal footer */
+  .ip-mfoot { padding: 12px 0 18px; display: flex; justify-content: flex-end; gap: 10px; }
+  .ip-btn-ghost { background: none; border: none; color: #71717a; font-weight: 600; font-size: 14px; cursor: pointer; padding: 9px 18px; border-radius: 9px; font-family: inherit; transition: .15s; }
+  .ip-btn-ghost:hover { color: #f4f4f5; background: rgba(255,255,255,.06); }
+  .ip-btn-save { display: flex; align-items: center; gap: 8px; color: #fff; border: none; font-weight: 700; font-size: 14px; padding: 9px 22px; border-radius: 9px; cursor: pointer; font-family: inherit; transition: .18s; }
+  .ip-btn-save:hover:not(:disabled) { filter: brightness(1.15); transform: translateY(-1px); }
+  .ip-btn-save:disabled { opacity: .6; cursor: not-allowed; transform: none; }
+  .ip-spin-sm { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: ipspin .7s linear infinite; }
 </style>
