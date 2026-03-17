@@ -103,6 +103,22 @@ func main() {
 	api.Post("/extensions/enable", metaHandler.EnableExtension)
 	api.Delete("/extensions/disable", metaHandler.DisableExtension)
 
+	// Cron Jobs
+	api.Get("/cron", metaHandler.ListCronJobs)
+	api.Post("/cron", metaHandler.CreateCronJob)
+	api.Delete("/cron", metaHandler.DeleteCronJob)
+	api.Patch("/cron/toggle", metaHandler.ToggleCronJob)
+
+	// Publications
+	api.Get("/publications", metaHandler.ListPublications)
+	api.Post("/publications", metaHandler.CreatePublication)
+	api.Delete("/publications", metaHandler.DeletePublication)
+
+	// Roles
+	api.Get("/roles", metaHandler.ListRoles)
+	api.Post("/roles", metaHandler.CreateRole)
+	api.Delete("/roles", metaHandler.DeleteRole)
+
 	// Trigger schema reload
 	api.Post("/reload", metaHandler.ReloadSchema)
 

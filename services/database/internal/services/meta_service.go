@@ -1218,6 +1218,9 @@ func (s *MetaService) EnableExtension(ctx context.Context, name, schema string) 
 	if schema == "" {
 		schema = "public"
 	}
+	if name == "pg_cron" {
+		schema = "pg_catalog"
+	}
 	// Validate extension name (alphanumeric + underscore only for safety)
 	for _, c := range name {
 		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
@@ -1251,3 +1254,232 @@ func (s *MetaService) DisableExtension(ctx context.Context, name string) error {
 	return err
 }
 
+// ─────────────────────────────────────────────────────
+// CRON JOBS
+// ─────────────────────────────────────────────────────
+
+type CronJobMeta struct {
+	JobId    int64  `json:"jobid"`
+	Schedule string `json:"schedule"`
+	Command  string `json:"command"`
+	Database string `json:"database"`
+	Username string `json:"username"`
+	Active   bool   `json:"active"`
+	JobName  string `json:"jobname"`
+}
+
+type CreateCronJobRequest struct {
+	JobName  string `json:"jobname"`
+	Schedule string `json:"schedule"`
+	Command  string `json:"command"`
+}
+
+func (s *MetaService) GetCronJobs(ctx context.Context) ([]CronJobMeta, error) {
+	var tableExists bool
+	err := s.db.QueryRow(ctx, "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'cron' AND table_name = 'job')").Scan(&tableExists)
+	if err != nil || !tableExists {
+		return make([]CronJobMeta, 0), nil
+	}
+
+	rows, err := s.db.Query(ctx, `
+		SELECT jobid, schedule, command, database, username, active, jobname
+		FROM cron.job
+		ORDER BY jobid ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []CronJobMeta
+	for rows.Next() {
+		var j CronJobMeta
+		err := rows.Scan(&j.JobId, &j.Schedule, &j.Command, &j.Database, &j.Username, &j.Active, &j.JobName)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, j)
+	}
+	if jobs == nil {
+		jobs = make([]CronJobMeta, 0)
+	}
+	return jobs, nil
+}
+
+func (s *MetaService) CreateCronJob(ctx context.Context, req CreateCronJobRequest) error {
+	var isLoaded bool
+	s.db.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')").Scan(&isLoaded)
+	if !isLoaded {
+		return fmt.Errorf("pg_cron extension is not enabled. Please enable it in the Extensions tab first")
+	}
+
+	sql := "SELECT cron.schedule($1, $2, $3)"
+	_, err := s.db.Exec(ctx, sql, req.JobName, req.Schedule, req.Command)
+	return err
+}
+
+func (s *MetaService) DeleteCronJob(ctx context.Context, jobid int64) error {
+	sql := "SELECT cron.unschedule($1)"
+	_, err := s.db.Exec(ctx, sql, jobid)
+	return err
+}
+
+func (s *MetaService) ToggleCronJob(ctx context.Context, jobid int64, active bool) error {
+	sql := "UPDATE cron.job SET active = $1 WHERE jobid = $2"
+	_, err := s.db.Exec(ctx, sql, active, jobid)
+	return err
+}
+
+// ─────────────────────────────────────────────────────
+// PUBLICATIONS
+// ─────────────────────────────────────────────────────
+
+type PublicationMeta struct {
+	PubName   string   `json:"pubname"`
+	AllTables bool     `json:"alltables"`
+	Insert    bool     `json:"insert"`
+	Update    bool     `json:"update"`
+	Delete    bool     `json:"delete"`
+	Truncate  bool     `json:"truncate"`
+	Tables    []string `json:"tables"`
+}
+
+type CreatePublicationRequest struct {
+	Name   string   `json:"name"`
+	Tables []string `json:"tables"` // empty means ALL TABLES
+}
+
+func (s *MetaService) GetPublications(ctx context.Context) ([]PublicationMeta, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT 
+			p.pubname, 
+			p.puballtables, 
+			p.pubinsert, 
+			p.pubupdate, 
+			p.pubdelete, 
+			p.pubtruncate,
+			COALESCE(
+				(SELECT array_agg(pt.schemaname || '.' || pt.tablename)
+				 FROM pg_publication_tables pt
+				 WHERE pt.pubname = p.pubname), 
+			'{}'::text[]) as tables
+		FROM pg_publication p
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pubs []PublicationMeta
+	for rows.Next() {
+		var p PublicationMeta
+		if err := rows.Scan(&p.PubName, &p.AllTables, &p.Insert, &p.Update, &p.Delete, &p.Truncate, &p.Tables); err != nil {
+			return nil, err
+		}
+		pubs = append(pubs, p)
+	}
+	if pubs == nil {
+		pubs = make([]PublicationMeta, 0)
+	}
+	return pubs, nil
+}
+
+func (s *MetaService) CreatePublication(ctx context.Context, req CreatePublicationRequest) error {
+	var sql string
+	if len(req.Tables) == 0 {
+		sql = fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES", pgx.Identifier{req.Name}.Sanitize())
+	} else {
+		safeTables := make([]string, len(req.Tables))
+		for i, t := range req.Tables {
+			parts := strings.Split(t, ".")
+			if len(parts) == 2 {
+				safeTables[i] = fmt.Sprintf("%s.%s", pgx.Identifier{parts[0]}.Sanitize(), pgx.Identifier{parts[1]}.Sanitize())
+			} else {
+				safeTables[i] = pgx.Identifier{t}.Sanitize()
+			}
+		}
+		sql = fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s", pgx.Identifier{req.Name}.Sanitize(), strings.Join(safeTables, ", "))
+	}
+	_, err := s.db.Exec(ctx, sql)
+	return err
+}
+
+func (s *MetaService) DeletePublication(ctx context.Context, name string) error {
+	sql := fmt.Sprintf("DROP PUBLICATION IF EXISTS %s", pgx.Identifier{name}.Sanitize())
+	_, err := s.db.Exec(ctx, sql)
+	return err
+}
+
+// ─────────────────────────────────────────────────────
+// ROLES
+// ─────────────────────────────────────────────────────
+
+type RoleMeta struct {
+	Rolename      string `json:"rolename"`
+	Rolsuper      bool   `json:"rolsuper"`
+	Rolinherit    bool   `json:"rolinherit"`
+	Rolcreaterole bool   `json:"rolcreaterole"`
+	Rolcreatedb   bool   `json:"rolcreatedb"`
+	Rolcanlogin   bool   `json:"rolcanlogin"`
+}
+
+type CreateRoleRequest struct {
+	Rolename string `json:"rolename"`
+	Password string `json:"password"`
+	CanLogin bool   `json:"canlogin"`
+	IsSuper  bool   `json:"issuper"`
+}
+
+func (s *MetaService) GetRoles(ctx context.Context) ([]RoleMeta, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin
+		FROM pg_roles
+		ORDER BY rolname
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var roles []RoleMeta
+	for rows.Next() {
+		var r RoleMeta
+		if err := rows.Scan(&r.Rolename, &r.Rolsuper, &r.Rolinherit, &r.Rolcreaterole, &r.Rolcreatedb, &r.Rolcanlogin); err != nil {
+			return nil, err
+		}
+		roles = append(roles, r)
+	}
+	if roles == nil {
+		roles = make([]RoleMeta, 0)
+	}
+	return roles, nil
+}
+
+func (s *MetaService) CreateRole(ctx context.Context, req CreateRoleRequest) error {
+	loginOpt := "NOLOGIN"
+	if req.CanLogin {
+		loginOpt = "LOGIN"
+	}
+	superOpt := "NOSUPERUSER"
+	if req.IsSuper {
+		superOpt = "SUPERUSER"
+	}
+	pwOpt := ""
+	if req.Password != "" {
+		pwOpt = fmt.Sprintf("PASSWORD '%s'", strings.ReplaceAll(req.Password, "'", "''"))
+	}
+	sql := fmt.Sprintf("CREATE ROLE %s %s %s %s", pgx.Identifier{req.Rolename}.Sanitize(), loginOpt, superOpt, pwOpt)
+	_, err := s.db.Exec(ctx, sql)
+	return err
+}
+
+func (s *MetaService) DeleteRole(ctx context.Context, rolename string) error {
+	reassignSql := fmt.Sprintf("REASSIGN OWNED BY %s TO CURRENT_USER", pgx.Identifier{rolename}.Sanitize())
+	s.db.Exec(ctx, reassignSql)
+	dropOwnedSql := fmt.Sprintf("DROP OWNED BY %s", pgx.Identifier{rolename}.Sanitize())
+	s.db.Exec(ctx, dropOwnedSql)
+
+	sql := fmt.Sprintf("DROP ROLE IF EXISTS %s", pgx.Identifier{rolename}.Sanitize())
+	_, err := s.db.Exec(ctx, sql)
+	return err
+}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -444,4 +445,120 @@ func (h *MetaHandler) DisableExtension(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 	return c.JSON(fiber.Map{"message": "extension disabled"})
+}
+
+// ─────────────────────────────────────────────────────
+// CRON JOBS HANDLERS
+// ─────────────────────────────────────────────────────
+
+func (h *MetaHandler) ListCronJobs(c *fiber.Ctx) error {
+	jobs, err := h.service.GetCronJobs(c.Context())
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(jobs)
+}
+
+func (h *MetaHandler) CreateCronJob(c *fiber.Ctx) error {
+	var req services.CreateCronJobRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if err := h.service.CreateCronJob(c.Context(), req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.Status(201).JSON(fiber.Map{"message": "cron job scheduled"})
+}
+
+func (h *MetaHandler) DeleteCronJob(c *fiber.Ctx) error {
+	jobid, err := strconv.ParseInt(c.Query("jobid"), 10, 64)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid jobid"})
+	}
+	if err := h.service.DeleteCronJob(c.Context(), jobid); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "cron job unscheduled"})
+}
+
+func (h *MetaHandler) ToggleCronJob(c *fiber.Ctx) error {
+	var req struct {
+		JobId  int64 `json:"jobid"`
+		Active bool  `json:"active"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if err := h.service.ToggleCronJob(c.Context(), req.JobId, req.Active); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "cron job toggled"})
+}
+
+// ─────────────────────────────────────────────────────
+// PUBLICATIONS HANDLERS
+// ─────────────────────────────────────────────────────
+
+func (h *MetaHandler) ListPublications(c *fiber.Ctx) error {
+	pubs, err := h.service.GetPublications(c.Context())
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(pubs)
+}
+
+func (h *MetaHandler) CreatePublication(c *fiber.Ctx) error {
+	var req services.CreatePublicationRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if err := h.service.CreatePublication(c.Context(), req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.Status(201).JSON(fiber.Map{"message": "publication created"})
+}
+
+func (h *MetaHandler) DeletePublication(c *fiber.Ctx) error {
+	name := strings.TrimSpace(c.Query("name"))
+	if name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	}
+	if err := h.service.DeletePublication(c.Context(), name); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "publication deleted"})
+}
+
+// ─────────────────────────────────────────────────────
+// ROLES HANDLERS
+// ─────────────────────────────────────────────────────
+
+func (h *MetaHandler) ListRoles(c *fiber.Ctx) error {
+	roles, err := h.service.GetRoles(c.Context())
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(roles)
+}
+
+func (h *MetaHandler) CreateRole(c *fiber.Ctx) error {
+	var req services.CreateRoleRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if err := h.service.CreateRole(c.Context(), req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.Status(201).JSON(fiber.Map{"message": "role created"})
+}
+
+func (h *MetaHandler) DeleteRole(c *fiber.Ctx) error {
+	name := strings.TrimSpace(c.Query("name"))
+	if name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	}
+	if err := h.service.DeleteRole(c.Context(), name); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "role deleted"})
 }
