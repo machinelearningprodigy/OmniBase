@@ -315,3 +315,133 @@ func (h *MetaHandler) GetFullSchema(c *fiber.Ctx) error {
 	}
 	return c.JSON(fullSchema)
 }
+
+// ─────────────────────────────────────────────────────
+// ENUM HANDLERS
+// ─────────────────────────────────────────────────────
+
+func (h *MetaHandler) ListEnums(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	enums, err := h.service.GetEnums(c.Context(), schema)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	if enums == nil {
+		enums = make([]services.EnumMeta, 0)
+	}
+	return c.JSON(enums)
+}
+
+func (h *MetaHandler) CreateEnum(c *fiber.Ctx) error {
+	var req services.CreateEnumRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if err := h.service.CreateEnum(c.Context(), req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.Status(201).JSON(fiber.Map{"message": "enum created"})
+}
+
+func (h *MetaHandler) UpdateEnum(c *fiber.Ctx) error {
+	var req services.UpdateEnumRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if err := h.service.UpdateEnum(c.Context(), req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "enum updated"})
+}
+
+func (h *MetaHandler) DeleteEnum(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	name := strings.TrimSpace(c.Query("name"))
+	if name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	}
+	if err := h.service.DeleteEnum(c.Context(), schema, name); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "enum deleted"})
+}
+
+// ─────────────────────────────────────────────────────
+// INDEX HANDLERS
+// ─────────────────────────────────────────────────────
+
+func (h *MetaHandler) ListIndexes(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	indexes, err := h.service.GetIndexes(c.Context(), schema)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	if indexes == nil {
+		indexes = make([]services.IndexMeta, 0)
+	}
+	return c.JSON(indexes)
+}
+
+func (h *MetaHandler) CreateIndex(c *fiber.Ctx) error {
+	var req services.CreateIndexRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if err := h.service.CreateIndex(c.Context(), req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.Status(201).JSON(fiber.Map{"message": "index created"})
+}
+
+func (h *MetaHandler) DeleteIndex(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	name := strings.TrimSpace(c.Query("name"))
+	table := strings.TrimSpace(c.Query("table"))
+	if name == "" || table == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "name and table required"})
+	}
+	if err := h.service.DeleteIndex(c.Context(), schema, table, name); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "index deleted"})
+}
+
+// ─────────────────────────────────────────────────────
+// EXTENSION HANDLERS
+// ─────────────────────────────────────────────────────
+
+func (h *MetaHandler) ListExtensions(c *fiber.Ctx) error {
+	exts, err := h.service.GetExtensions(c.Context())
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(exts)
+}
+
+func (h *MetaHandler) EnableExtension(c *fiber.Ctx) error {
+	var payload struct {
+		Name   string `json:"name"`
+		Schema string `json:"schema"`
+	}
+	if err := c.BodyParser(&payload); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if strings.TrimSpace(payload.Name) == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	}
+	if err := h.service.EnableExtension(c.Context(), payload.Name, payload.Schema); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "extension enabled"})
+}
+
+func (h *MetaHandler) DisableExtension(c *fiber.Ctx) error {
+	name := strings.TrimSpace(c.Query("name"))
+	if name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	}
+	if err := h.service.DisableExtension(c.Context(), name); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "extension disabled"})
+}

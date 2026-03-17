@@ -87,6 +87,22 @@ func main() {
 	// Foreign Keys
 	api.Get("/foreign-keys", metaHandler.ListForeignKeys)
 
+	// Enum Types
+	api.Get("/enums", metaHandler.ListEnums)
+	api.Post("/enums", metaHandler.CreateEnum)
+	api.Patch("/enums", metaHandler.UpdateEnum)
+	api.Delete("/enums", metaHandler.DeleteEnum)
+
+	// Indexes
+	api.Get("/indexes", metaHandler.ListIndexes)
+	api.Post("/indexes", metaHandler.CreateIndex)
+	api.Delete("/indexes", metaHandler.DeleteIndex)
+
+	// Extensions
+	api.Get("/extensions", metaHandler.ListExtensions)
+	api.Post("/extensions/enable", metaHandler.EnableExtension)
+	api.Delete("/extensions/disable", metaHandler.DisableExtension)
+
 	// Trigger schema reload
 	api.Post("/reload", metaHandler.ReloadSchema)
 

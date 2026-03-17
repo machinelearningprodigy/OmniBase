@@ -917,3 +917,337 @@ func (s *MetaService) GetFullSchema(ctx context.Context, schema string) ([]Schem
 	return schemaTables, nil
 }
 
+// ─────────────────────────────────────────────────────
+// ENUM TYPES
+// ─────────────────────────────────────────────────────
+
+type EnumMeta struct {
+	Name   string   `json:"name"`
+	Schema string   `json:"schema"`
+	Values []string `json:"values"`
+}
+
+type CreateEnumRequest struct {
+	Name   string   `json:"name"`
+	Schema string   `json:"schema"`
+	Values []string `json:"values"`
+}
+
+type UpdateEnumRequest struct {
+	Name      string   `json:"name"`
+	Schema    string   `json:"schema"`
+	AddValues []string `json:"add_values"`
+}
+
+func (s *MetaService) GetEnums(ctx context.Context, schema string) ([]EnumMeta, error) {
+	query := `
+		SELECT
+			t.typname AS name,
+			n.nspname AS schema,
+			array_agg(e.enumlabel ORDER BY e.enumsortorder) AS values
+		FROM pg_type t
+		JOIN pg_namespace n ON n.oid = t.typnamespace
+		JOIN pg_enum e ON e.enumtypid = t.oid
+		WHERE t.typtype = 'e' AND n.nspname = $1
+		GROUP BY t.typname, n.nspname
+		ORDER BY t.typname;
+	`
+	rows, err := s.db.Query(ctx, query, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var enums []EnumMeta
+	for rows.Next() {
+		var e EnumMeta
+		if err := rows.Scan(&e.Name, &e.Schema, &e.Values); err != nil {
+			return nil, err
+		}
+		enums = append(enums, e)
+	}
+	return enums, nil
+}
+
+func (s *MetaService) CreateEnum(ctx context.Context, req CreateEnumRequest) error {
+	if strings.TrimSpace(req.Name) == "" {
+		return fmt.Errorf("enum name is required")
+	}
+	if req.Schema == "" {
+		req.Schema = "public"
+	}
+	if len(req.Values) == 0 {
+		return fmt.Errorf("at least one value is required")
+	}
+
+	quoted := make([]string, len(req.Values))
+	for i, v := range req.Values {
+		quoted[i] = fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''"))
+	}
+	sql := fmt.Sprintf("CREATE TYPE %s.%s AS ENUM (%s)",
+		pgx.Identifier{req.Schema}.Sanitize(),
+		pgx.Identifier{req.Name}.Sanitize(),
+		strings.Join(quoted, ", "),
+	)
+	_, err := s.db.Exec(ctx, sql)
+	if err == nil {
+		_ = s.recordMigration(ctx, "create_enum_"+req.Name, sql)
+	}
+	return err
+}
+
+func (s *MetaService) UpdateEnum(ctx context.Context, req UpdateEnumRequest) error {
+	if req.Schema == "" {
+		req.Schema = "public"
+	}
+	for _, v := range req.AddValues {
+		sql := fmt.Sprintf("ALTER TYPE %s.%s ADD VALUE IF NOT EXISTS '%s'",
+			pgx.Identifier{req.Schema}.Sanitize(),
+			pgx.Identifier{req.Name}.Sanitize(),
+			strings.ReplaceAll(v, "'", "''"),
+		)
+		if _, err := s.db.Exec(ctx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MetaService) DeleteEnum(ctx context.Context, schema, name string) error {
+	if schema == "" {
+		schema = "public"
+	}
+	sql := fmt.Sprintf("DROP TYPE %s.%s CASCADE",
+		pgx.Identifier{schema}.Sanitize(),
+		pgx.Identifier{name}.Sanitize(),
+	)
+	_, err := s.db.Exec(ctx, sql)
+	return err
+}
+
+// ─────────────────────────────────────────────────────
+// INDEXES
+// ─────────────────────────────────────────────────────
+
+type IndexMeta struct {
+	Name        string `json:"name"`
+	Schema      string `json:"schema"`
+	Table       string `json:"table"`
+	Columns     string `json:"columns"`
+	IndexType   string `json:"index_type"`
+	IsUnique    bool   `json:"is_unique"`
+	IsPrimary   bool   `json:"is_primary"`
+	IsValid     bool   `json:"is_valid"`
+	Size        string `json:"size"`
+	Scans       int64  `json:"scans"`
+	Definition  string `json:"definition"`
+}
+
+type CreateIndexRequest struct {
+	Name      string   `json:"name"`
+	Schema    string   `json:"schema"`
+	Table     string   `json:"table"`
+	Columns   []string `json:"columns"`
+	IndexType string   `json:"index_type"` // BTREE, HASH, GIN, GiST, BRIN, HNSW
+	IsUnique  bool     `json:"is_unique"`
+}
+
+func (s *MetaService) GetIndexes(ctx context.Context, schema string) ([]IndexMeta, error) {
+	query := `
+		SELECT
+			i.relname AS name,
+			n.nspname AS schema,
+			t.relname AS table,
+			pg_get_indexdef(ix.indexrelid) AS definition,
+			am.amname AS index_type,
+			ix.indisunique AS is_unique,
+			ix.indisprimary AS is_primary,
+			ix.indisvalid AS is_valid,
+			COALESCE(pg_size_pretty(pg_relation_size(i.oid)), '0 bytes') AS size,
+			COALESCE(s.idx_scan, 0) AS scans,
+			array_to_string(
+				ARRAY(
+					SELECT pg_get_indexdef(ix.indexrelid, k+1, true)
+					FROM generate_subscripts(ix.indkey, 1) AS k
+					WHERE ix.indkey[k] != 0
+				), ', '
+			) AS columns
+		FROM pg_index ix
+		JOIN pg_class i ON i.oid = ix.indexrelid
+		JOIN pg_class t ON t.oid = ix.indrelid
+		JOIN pg_namespace n ON n.oid = t.relnamespace
+		JOIN pg_am am ON am.oid = i.relam
+		LEFT JOIN pg_stat_user_indexes s ON s.indexrelid = ix.indexrelid
+		WHERE n.nspname = $1
+		  AND NOT ix.indisprimary
+		ORDER BY t.relname, i.relname;
+	`
+	rows, err := s.db.Query(ctx, query, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var indexes []IndexMeta
+	for rows.Next() {
+		var idx IndexMeta
+		if err := rows.Scan(
+			&idx.Name, &idx.Schema, &idx.Table, &idx.Definition,
+			&idx.IndexType, &idx.IsUnique, &idx.IsPrimary, &idx.IsValid,
+			&idx.Size, &idx.Scans, &idx.Columns,
+		); err != nil {
+			return nil, err
+		}
+		indexes = append(indexes, idx)
+	}
+	return indexes, nil
+}
+
+func (s *MetaService) CreateIndex(ctx context.Context, req CreateIndexRequest) error {
+	if strings.TrimSpace(req.Name) == "" {
+		return fmt.Errorf("index name is required")
+	}
+	if strings.TrimSpace(req.Table) == "" {
+		return fmt.Errorf("table is required")
+	}
+	if len(req.Columns) == 0 {
+		return fmt.Errorf("at least one column is required")
+	}
+	if req.Schema == "" {
+		req.Schema = "public"
+	}
+	if req.IndexType == "" {
+		req.IndexType = "BTREE"
+	}
+
+	unique := ""
+	if req.IsUnique {
+		unique = "UNIQUE "
+	}
+
+	quotedCols := make([]string, len(req.Columns))
+	for i, col := range req.Columns {
+		quotedCols[i] = pgx.Identifier{col}.Sanitize()
+	}
+
+	sql := fmt.Sprintf(
+		"CREATE %sINDEX %s ON %s.%s USING %s (%s)",
+		unique,
+		pgx.Identifier{req.Name}.Sanitize(),
+		pgx.Identifier{req.Schema}.Sanitize(),
+		pgx.Identifier{req.Table}.Sanitize(),
+		req.IndexType,
+		strings.Join(quotedCols, ", "),
+	)
+	_, err := s.db.Exec(ctx, sql)
+	if err == nil {
+		_ = s.recordMigration(ctx, "create_index_"+req.Name, sql)
+	}
+	return err
+}
+
+func (s *MetaService) DeleteIndex(ctx context.Context, schema, table, name string) error {
+	if schema == "" {
+		schema = "public"
+	}
+
+	var isConstraint bool
+	err := s.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conname = $1 AND connamespace = $2::regnamespace)", name, schema).Scan(&isConstraint)
+
+	if err == nil && isConstraint {
+		sqlConstraint := fmt.Sprintf("ALTER TABLE %s.%s DROP CONSTRAINT %s CASCADE",
+			pgx.Identifier{schema}.Sanitize(),
+			pgx.Identifier{table}.Sanitize(),
+			pgx.Identifier{name}.Sanitize(),
+		)
+		_, err = s.db.Exec(ctx, sqlConstraint)
+		return err
+	}
+
+	sql := fmt.Sprintf("DROP INDEX %s.%s CASCADE",
+		pgx.Identifier{schema}.Sanitize(),
+		pgx.Identifier{name}.Sanitize(),
+	)
+	_, err = s.db.Exec(ctx, sql)
+	return err
+}
+
+// ─────────────────────────────────────────────────────
+// EXTENSIONS
+// ─────────────────────────────────────────────────────
+
+type ExtensionMeta struct {
+	Name        string `json:"name"`
+	Schema      string `json:"schema"`
+	Version     string `json:"version"`
+	Description string `json:"description"`
+	Installed   bool   `json:"installed"`
+}
+
+func (s *MetaService) GetExtensions(ctx context.Context) ([]ExtensionMeta, error) {
+	// Get available extensions with their installed status
+	query := `
+		SELECT
+			ae.name,
+			COALESCE(e.extnamespace::regnamespace::text, '') AS schema,
+			COALESCE(e.extversion, ae.default_version) AS version,
+			COALESCE(ae.comment, '') AS description,
+			e.extname IS NOT NULL AS installed
+		FROM pg_available_extensions ae
+		LEFT JOIN pg_extension e ON e.extname = ae.name
+		ORDER BY installed DESC, ae.name;
+	`
+	rows, err := s.db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var exts []ExtensionMeta
+	for rows.Next() {
+		var ext ExtensionMeta
+		if err := rows.Scan(&ext.Name, &ext.Schema, &ext.Version, &ext.Description, &ext.Installed); err != nil {
+			return nil, err
+		}
+		exts = append(exts, ext)
+	}
+	return exts, nil
+}
+
+func (s *MetaService) EnableExtension(ctx context.Context, name, schema string) error {
+	if schema == "" {
+		schema = "public"
+	}
+	// Validate extension name (alphanumeric + underscore only for safety)
+	for _, c := range name {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return fmt.Errorf("invalid extension name")
+		}
+	}
+	sql := fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS \"%s\" SCHEMA %s",
+		name,
+		pgx.Identifier{schema}.Sanitize(),
+	)
+	_, err := s.db.Exec(ctx, sql)
+	if err == nil {
+		_ = s.recordMigration(ctx, "enable_extension_"+name, sql)
+		_ = s.ReloadSchemaCache(ctx)
+	}
+	return err
+}
+
+func (s *MetaService) DisableExtension(ctx context.Context, name string) error {
+	for _, c := range name {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return fmt.Errorf("invalid extension name")
+		}
+	}
+	sql := fmt.Sprintf("DROP EXTENSION IF EXISTS \"%s\" CASCADE", name)
+	_, err := s.db.Exec(ctx, sql)
+	if err == nil {
+		_ = s.recordMigration(ctx, "disable_extension_"+name, sql)
+		_ = s.ReloadSchemaCache(ctx)
+	}
+	return err
+}
+
