@@ -210,7 +210,7 @@ func (s *MetaService) RunQuery(ctx context.Context, sql string, migrationName st
 
 			rows, err := tx.Query(ctx, sql)
 			if err != nil {
-				return err
+				return err     
 			}
 			defer rows.Close()
 

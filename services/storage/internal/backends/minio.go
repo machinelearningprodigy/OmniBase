@@ -12,7 +12,7 @@ import (
 )
 
 // StorageBackend defines the interface all storage backends must implement.
-// This allows swapping MinIO for S3, GCS, Azure Blob, or local disk
+// This allows swapping MinIO for S3, GCS, Azure Blob, or local disk 
 // without changing the rest of the storage service.
 type StorageBackend interface {
 	PutObject(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string) error
