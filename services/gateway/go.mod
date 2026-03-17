@@ -1,6 +1,6 @@
 module github.com/machinelearningprodigy/OmniBase/gateway
 
-go 1.24
+go 1.24.0
 
 require (
 	github.com/fasthttp/websocket v1.5.8

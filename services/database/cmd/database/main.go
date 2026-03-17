@@ -77,6 +77,15 @@ func main() {
 
 	// Schemas metadata
 	api.Get("/schemas", metaHandler.ListSchemas)
+	api.Get("/full-schema", metaHandler.GetFullSchema)
+
+	// Triggers
+	api.Get("/triggers", metaHandler.ListTriggers)
+	api.Post("/triggers", metaHandler.CreateTrigger)
+	api.Delete("/triggers", metaHandler.DeleteTrigger)
+
+	// Foreign Keys
+	api.Get("/foreign-keys", metaHandler.ListForeignKeys)
 
 	// Trigger schema reload
 	api.Post("/reload", metaHandler.ReloadSchema)

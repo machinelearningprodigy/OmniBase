@@ -16,7 +16,7 @@
       </div>
       <div class="form-group">
         <label class="label">Payload (JSON)</label>
-        <textarea class="input input-mono" style="height:100px;display:block">{"x": 42, "y": 88, "user": "alice"}</textarea>
+        <textarea class="input input-mono" style="height:100px;display:block">{"{\"x\": 42, \"y\": 88, \"user\": \"alice\"}"}</textarea>
       </div>
       <button class="btn btn-primary">⚡ Broadcast</button>
     </div>

@@ -265,3 +265,53 @@ func (h *MetaHandler) ResolveGraphQL(c *fiber.Ctx) error {
 
 	return c.JSON(result)
 }
+func (h *MetaHandler) ListTriggers(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	triggers, err := h.service.GetTriggers(c.Context(), schema)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(triggers)
+}
+
+func (h *MetaHandler) CreateTrigger(c *fiber.Ctx) error {
+	var req services.CreateTriggerRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid payload"})
+	}
+	if err := h.service.CreateTrigger(c.Context(), req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.Status(201).JSON(fiber.Map{"message": "trigger created"})
+}
+
+func (h *MetaHandler) DeleteTrigger(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	table := c.Query("table")
+	name := c.Query("name")
+	if table == "" || name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "table and name are required"})
+	}
+	if err := h.service.DeleteTrigger(c.Context(), schema, table, name); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "trigger deleted"})
+}
+
+func (h *MetaHandler) ListForeignKeys(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	fks, err := h.service.GetForeignKeys(c.Context(), schema)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fks)
+}
+
+func (h *MetaHandler) GetFullSchema(c *fiber.Ctx) error {
+	schema := c.Query("schema", "public")
+	fullSchema, err := h.service.GetFullSchema(c.Context(), schema)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fullSchema)
+}

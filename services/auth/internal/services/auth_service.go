@@ -159,12 +159,17 @@ func (s *AuthService) SignUp(ctx context.Context, req SignUpRequest) (*SignUpRes
 		user.RawUserMetaData = models.JSONB(req.Options.Data)
 	}
 
+	var projectID any = req.ProjectID
+	if req.ProjectID == "" {
+		projectID = nil
+	}
+
 	_, err = s.db.Exec(ctx, `
 		INSERT INTO auth.users (
 			id, email, password_hash, role, raw_user_meta_data, is_super_admin, email_confirmed_at, project_id, created_at, updated_at
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, user.ID, user.Email, user.PasswordHash, user.Role, user.RawUserMetaData, user.IsSuperAdmin, user.EmailConfirmedAt, req.ProjectID, user.CreatedAt, user.UpdatedAt)
+	`, user.ID, user.Email, user.PasswordHash, user.Role, user.RawUserMetaData, user.IsSuperAdmin, user.EmailConfirmedAt, projectID, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
@@ -1045,6 +1050,7 @@ func (s *AuthService) ensureSystemTables(ctx context.Context) error {
 			phone_confirmed_at TIMESTAMPTZ,
 			last_sign_in_at TIMESTAMPTZ,
 			banned_until TIMESTAMPTZ,
+			project_id UUID,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
@@ -1088,6 +1094,7 @@ func (s *AuthService) ensureSystemTables(ctx context.Context) error {
 			state_hash TEXT PRIMARY KEY,
 			provider TEXT NOT NULL,
 			redirect_to TEXT,
+			project_id UUID,
 			expires_at TIMESTAMPTZ NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
@@ -1175,6 +1182,7 @@ func (s *AuthService) ensureSystemTables(ctx context.Context) error {
 
 		CREATE TABLE IF NOT EXISTS auth.identity_providers (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			project_id UUID,
 			type TEXT NOT NULL, -- 'oauth2', 'saml', 'oidc'
 			name TEXT NOT NULL UNIQUE,
 			client_id TEXT,

@@ -260,15 +260,24 @@
 
     try {
       await loadColumns(table)
-      const resp = await apiFetch(`${getOmniBaseUrl()}/rest/v1/${table.name}?limit=50&select=*`, {
-        headers: buildRestHeaders(table.schema)
+      // Use the admin /pg/query endpoint (runs as superuser → bypasses RLS) so the
+      // dashboard table editor always shows all rows, regardless of RLS policies.
+      // End-users querying via /rest/v1/ are still fully restricted by policies.
+      const schemaPrefix = table.schema && table.schema !== 'public' ? `"${table.schema}".` : ''
+      const adminQuery = `SELECT * FROM ${schemaPrefix}"${table.name}" LIMIT 50`
+      const resp = await apiFetch(`${getOmniBaseUrl()}/pg/query`, {
+        method: 'POST',
+        headers: getHeaders(true),
+        body: JSON.stringify({ query: adminQuery })
       })
       if (!resp.ok) {
         error = await getErrorMessage(resp, `Failed to load data: ${resp.statusText}`)
         tableData = []
         return
       }
-      tableData = await resp.json()
+      const result = await resp.json()
+      // /pg/query returns an array of rows (for SELECT statements)
+      tableData = Array.isArray(result) ? result : []
     } catch (e) {
       error = e instanceof Error ? e.message : 'Could not connect to the API gateway. Is it running?'
       tableData = []
@@ -343,6 +352,39 @@
     insertError = null
   }
 
+  // Helper: build a table reference respecting schema
+  function tableRef(meta: Table) {
+    const s = meta.schema && meta.schema !== 'public' ? `"${meta.schema}".` : ''
+    return `${s}"${meta.name}"`
+  }
+
+  // Helper: escape a value for embedding in a SQL literal (admin-only, not user input)
+  function sqlLiteral(value: unknown): string {
+    if (value === null || value === undefined) return 'NULL'
+    if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE'
+    if (typeof value === 'number') return String(value)
+    if (typeof value === 'object') return `'${JSON.stringify(value).replace(/'/g, "''")}'`
+    return `'${String(value).replace(/'/g, "''")}'`
+  }
+
+  async function adminQuery(sql: string): Promise<{ ok: boolean; data?: unknown[]; error?: string }> {
+    try {
+      const resp = await apiFetch(`${getOmniBaseUrl()}/pg/query`, {
+        method: 'POST',
+        headers: getHeaders(true),
+        body: JSON.stringify({ query: sql })
+      })
+      if (!resp.ok) {
+        const msg = await getErrorMessage(resp, resp.statusText)
+        return { ok: false, error: msg }
+      }
+      const data = await resp.json()
+      return { ok: true, data: Array.isArray(data) ? data : [] }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : 'Network error' }
+    }
+  }
+
   async function submitInsert() {
     if (!selectedTable || !selectedTableMeta) return
     insertLoading = true
@@ -360,12 +402,16 @@
       }
     }
     try {
-      const headers = buildRestHeaders(currentSchema, true)
-      headers.Prefer = 'return=representation'
-      const resp = await apiFetch(`${getOmniBaseUrl()}/rest/v1/${selectedTable}`, { method: 'POST', headers, body: JSON.stringify(row) })
-      if (!resp.ok) {
-        insertError = await getErrorMessage(resp, resp.statusText)
-        return
+      const keys = Object.keys(row)
+      if (keys.length === 0) {
+        // Insert with all defaults
+        const result = await adminQuery(`INSERT INTO ${tableRef(selectedTableMeta)} DEFAULT VALUES`)
+        if (!result.ok) { insertError = result.error ?? 'Insert failed'; return }
+      } else {
+        const cols = keys.map((k) => `"${k}"`).join(', ')
+        const vals = keys.map((k) => sqlLiteral(row[k])).join(', ')
+        const result = await adminQuery(`INSERT INTO ${tableRef(selectedTableMeta)} (${cols}) VALUES (${vals})`)
+        if (!result.ok) { insertError = result.error ?? 'Insert failed'; return }
       }
       await selectTable(selectedTableMeta)
       closeInsertModal()
@@ -392,8 +438,7 @@
 
   async function saveEdit(row: Record<string, unknown>, column: ColumnMeta) {
     if (!selectedTable || !selectedTableMeta || !editingCell) return
-    const rowFilter = getRowFilterQuery(row)
-    if (!rowFilter) {
+    if (getPrimaryColumns().length === 0) {
       rowMutationError = 'Inline editing requires a primary key on the table.'
       return
     }
@@ -407,20 +452,14 @@
     rowMutationLoading = editingCell.rowKey
     rowMutationError = null
     try {
-      const headers = buildRestHeaders(currentSchema, true)
-      headers.Prefer = 'return=representation'
-      const resp = await apiFetch(`${getOmniBaseUrl()}/rest/v1/${selectedTable}?${rowFilter}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ [column.name]: nextValue })
-      })
-      if (!resp.ok) {
-        rowMutationError = await getErrorMessage(resp, `Failed to update ${column.name}`)
-        return
-      }
-      const data = await resp.json()
-      if (Array.isArray(data) && data.length === 0) {
-        rowMutationError = 'Row update matched 0 database records. Please refresh.'
+      // Build a WHERE clause from primary key columns
+      const pkWhere = getPrimaryColumns()
+        .map((pk) => `"${pk.name}" = ${sqlLiteral(row[pk.name])}`)
+        .join(' AND ')
+      const sql = `UPDATE ${tableRef(selectedTableMeta)} SET "${column.name}" = ${sqlLiteral(nextValue)} WHERE ${pkWhere}`
+      const result = await adminQuery(sql)
+      if (!result.ok) {
+        rowMutationError = result.error ?? `Failed to update ${column.name}`
         return
       }
       await selectTable(selectedTableMeta)
@@ -464,41 +503,26 @@
     rowMutationLoading = 'bulk-delete'
     rowMutationError = null
     let deletedCount = 0
-    let failedDueToPolicy = false
     try {
-      const headers = buildRestHeaders(currentSchema, true)
-      headers.Prefer = 'return=representation'
       for (const rowKey of selectedRows) {
         const row = tableData.find((r) => getRowKey(r) === rowKey)
         if (!row) continue
-        const rowFilter = getRowFilterQuery(row)
-        if (rowFilter) {
-          const url = `${getOmniBaseUrl()}/rest/v1/${selectedTableMeta!.name}?${rowFilter}`
-          const resp = await apiFetch(url, {
-            method: 'DELETE',
-            headers
-          })
-          if (resp.ok) {
-            const data = await resp.json()
-            if (Array.isArray(data) && data.length > 0) {
-              deletedCount++
-            } else {
-              failedDueToPolicy = true
-            }
-          }
-        }
+        const pkCols = getPrimaryColumns()
+        if (pkCols.length === 0) continue
+        const pkWhere = pkCols.map((pk) => `"${pk.name}" = ${sqlLiteral(row[pk.name])}`).join(' AND ')
+        const result = await adminQuery(`DELETE FROM ${tableRef(selectedTableMeta!)} WHERE ${pkWhere}`)
+        if (result.ok) deletedCount++
       }
-      
-      if (deletedCount === 0 && selectedRows.length > 0 && failedDueToPolicy) {
-        rowMutationError = 'No rows were deleted. Check if Row Level Security (RLS) is blocking your DELETE request.'
+      if (deletedCount === 0 && selectedRows.length > 0) {
+        rowMutationError = 'No rows were deleted. The table may not have a primary key.'
       } else if (deletedCount < selectedRows.length) {
-        rowMutationError = `Deleted ${deletedCount} of ${selectedRows.length} rows. Some deletions may have been blocked by RLS.`
+        rowMutationError = `Deleted ${deletedCount} of ${selectedRows.length} rows.`
       } else {
         tableNotice = `Successfully deleted ${deletedCount} rows.`
         selectedRows = []
       }
       await selectTable(selectedTableMeta!)
-    } catch (err) {
+    } catch {
       rowMutationError = 'Failed to delete selected rows.'
     } finally {
       rowMutationLoading = null
@@ -517,29 +541,23 @@
 
   async function executeSingleDelete(row: Record<string, unknown>) {
     confirmDeleteAction = null
-    const rowFilter = getRowFilterQuery(row)
-    if (!rowFilter || !selectedTableMeta) return
-    
+    if (!selectedTableMeta) return
+    const pkCols = getPrimaryColumns()
+    if (pkCols.length === 0) {
+      rowMutationError = 'Row deletion requires a primary key on the table.'
+      return
+    }
     rowMutationLoading = getRowKey(row)
     rowMutationError = null
     try {
-      const headers = buildRestHeaders(currentSchema, true)
-      headers.Prefer = 'return=representation'
-      const resp = await apiFetch(`${getOmniBaseUrl()}/rest/v1/${selectedTableMeta.name}?${rowFilter}`, {
-        method: 'DELETE',
-        headers
-      })
-      if (!resp.ok) {
-        rowMutationError = await getErrorMessage(resp, 'Failed to delete row')
+      const pkWhere = pkCols.map((pk) => `"${pk.name}" = ${sqlLiteral(row[pk.name])}`).join(' AND ')
+      const result = await adminQuery(`DELETE FROM ${tableRef(selectedTableMeta)} WHERE ${pkWhere}`)
+      if (!result.ok) {
+        rowMutationError = result.error ?? 'Failed to delete row'
         return
       }
-      const data = await resp.json()
-      if (Array.isArray(data) && data.length > 0) {
-        await selectTable(selectedTableMeta)
-        tableNotice = `Row removed from ${selectedTableMeta.schema}.${selectedTableMeta.name}.`
-      } else {
-        rowMutationError = 'Deletion failed. This row may be protected by Row Level Security (RLS) policies.'
-      }
+      await selectTable(selectedTableMeta)
+      tableNotice = `Row removed from ${selectedTableMeta.schema}.${selectedTableMeta.name}.`
     } catch {
       rowMutationError = 'Failed to delete row.'
     } finally {
@@ -551,26 +569,21 @@
   async function duplicateRow(row: Record<string, unknown>) {
     if (!selectedTableMeta) return
     rowMutationLoading = getRowKey(row)
-    
-    // Duplicate everything except primary keys
-    const newRow = { ...row }
+    // Duplicate everything except primary keys (they get new defaults)
+    const newRow: Record<string, unknown> = {}
     for (const column of columns) {
-      if (column.is_primary) {
-        delete newRow[column.name]
-      }
+      if (!column.is_primary) newRow[column.name] = row[column.name]
     }
-    
     try {
-      const headers = buildRestHeaders(currentSchema, true)
-      headers.Prefer = 'return=representation'
-      const resp = await apiFetch(`${getOmniBaseUrl()}/rest/v1/${selectedTableMeta.name}`, { 
-        method: 'POST', 
-        headers, 
-        body: JSON.stringify(newRow) 
-      })
-      if (!resp.ok) {
-        rowMutationError = await getErrorMessage(resp, 'Failed to duplicate row')
-        return
+      const keys = Object.keys(newRow)
+      if (keys.length === 0) {
+        const result = await adminQuery(`INSERT INTO ${tableRef(selectedTableMeta)} DEFAULT VALUES`)
+        if (!result.ok) { rowMutationError = result.error ?? 'Failed to duplicate row'; return }
+      } else {
+        const cols = keys.map((k) => `"${k}"`).join(', ')
+        const vals = keys.map((k) => sqlLiteral(newRow[k])).join(', ')
+        const result = await adminQuery(`INSERT INTO ${tableRef(selectedTableMeta)} (${cols}) VALUES (${vals})`)
+        if (!result.ok) { rowMutationError = result.error ?? 'Failed to duplicate row'; return }
       }
       await selectTable(selectedTableMeta)
       tableNotice = `Row duplicated successfully.`

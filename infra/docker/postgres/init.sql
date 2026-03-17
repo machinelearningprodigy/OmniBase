@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS auth.users (
     phone_confirmed_at  TIMESTAMPTZ,
     last_sign_in_at     TIMESTAMPTZ,
     banned_until        TIMESTAMPTZ,
+    project_id          UUID,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -162,6 +163,22 @@ CREATE INDEX IF NOT EXISTS storage_objects_name_idx ON storage.objects(name);
 CREATE INDEX IF NOT EXISTS storage_objects_owner_idx ON storage.objects(owner);
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Auth Helper Functions (must be defined BEFORE any RLS policies reference them)
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Function to get current user ID from JWT (used in RLS policies)
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $$
+    SELECT NULLIF(current_setting('request.jwt.claims', TRUE)::jsonb->>'sub', '')::UUID
+$$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION auth.role() RETURNS TEXT AS $$
+    SELECT NULLIF(current_setting('request.jwt.claims', TRUE)::jsonb->>'role', '')
+$$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION auth.email() RETURNS TEXT AS $$
+    SELECT NULLIF(current_setting('request.jwt.claims', TRUE)::jsonb->>'email', '')
+$$ LANGUAGE sql STABLE;
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Row Level Security Setup
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Enable RLS on public tables (user tables added via schema editor will have RLS enabled)
@@ -178,18 +195,7 @@ CREATE POLICY "Public buckets are readable" ON storage.objects
 CREATE POLICY "Owners can modify their objects" ON storage.objects
     FOR ALL USING (owner = auth.uid());
 
--- Function to get current user ID from JWT (used in RLS policies)
-CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $$
-    SELECT NULLIF(current_setting('request.jwt.claims', TRUE)::jsonb->>'sub', '')::UUID
-$$ LANGUAGE sql STABLE;
-
-CREATE OR REPLACE FUNCTION auth.role() RETURNS TEXT AS $$
-    SELECT NULLIF(current_setting('request.jwt.claims', TRUE)::jsonb->>'role', '')
-$$ LANGUAGE sql STABLE;
-
-CREATE OR REPLACE FUNCTION auth.email() RETURNS TEXT AS $$
-    SELECT NULLIF(current_setting('request.jwt.claims', TRUE)::jsonb->>'email', '')
-$$ LANGUAGE sql STABLE;
+-- auth.uid(), auth.role(), auth.email() are defined above (before RLS policies)
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Grant permissions to roles
@@ -260,6 +266,7 @@ CREATE TABLE IF NOT EXISTS omnibase.oauth_states (
     state_hash      TEXT PRIMARY KEY,
     provider        TEXT NOT NULL,
     redirect_to     TEXT,
+    project_id      UUID,
     expires_at      TIMESTAMPTZ NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

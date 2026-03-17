@@ -83,18 +83,58 @@ type MigrationMeta struct {
 	ExecutedAt string `json:"executed_at"`
 }
 
+type TriggerMeta struct {
+	Name       string `json:"name"`
+	Schema     string `json:"schema"`
+	Table      string `json:"table"`
+	Function   string `json:"function"`
+	Events     string `json:"events"`
+	Timing     string `json:"timing"`
+	Orientation string `json:"orientation"`
+	Enabled    string `json:"enabled"`
+	Definition string `json:"definition"`
+}
+
+type CreateTriggerRequest struct {
+	Name        string   `json:"name"`
+	Schema      string   `json:"schema"`
+	Table       string   `json:"table"`
+	Function    string   `json:"function"`
+	Events      []string `json:"events"`
+	Timing      string   `json:"timing"`
+	Orientation string   `json:"orientation"`
+}
+
+type ForeignKeyMeta struct {
+	ConstraintName string `json:"constraint_name"`
+	FromSchema     string `json:"from_schema"`
+	FromTable      string `json:"from_table"`
+	FromColumn     string `json:"from_column"`
+	ToSchema       string `json:"to_schema"`
+	ToTable        string `json:"to_table"`
+	ToColumn       string `json:"to_column"`
+	OnDelete       string `json:"on_delete"`
+	OnUpdate       string `json:"on_update"`
+}
+
+type SchemaTableMeta struct {
+	Name    string           `json:"name"`
+	Schema  string           `json:"schema"`
+	Columns []ColumnDefinition `json:"columns"`
+	HasRLS  bool             `json:"has_rls"`
+}
+
 // GetTables returns a list of tables and their metadata in the specified schema
 func (s *MetaService) GetTables(ctx context.Context, schema string) ([]TableMeta, error) {
 	query := `
 		SELECT 
 			c.relname as name,
 			n.nspname as schema,
-			COALESCE(s.n_live_tup, 0) as row_count,
+			(SELECT COALESCE(n_live_tup, 0) FROM pg_stat_user_tables WHERE relid = c.oid) as row_count,
 			pg_size_pretty(pg_total_relation_size(c.oid)) as size,
 			c.relrowsecurity as has_rls
 		FROM pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
-		LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
 		WHERE n.nspname = $1 AND c.relkind = 'r'
 		ORDER BY c.relname;
 	`
@@ -118,22 +158,21 @@ func (s *MetaService) GetTables(ctx context.Context, schema string) ([]TableMeta
 func (s *MetaService) GetTableColumns(ctx context.Context, schema, table string) ([]ColumnDefinition, error) {
 	query := `
 		SELECT
-			c.column_name,
-			c.udt_name,
-			c.is_nullable = 'YES' AS is_nullable,
-			COALESCE(tc.constraint_type = 'PRIMARY KEY', false) AS is_primary,
-			COALESCE(c.column_default, '') AS column_default
-		FROM information_schema.columns c
-		LEFT JOIN information_schema.key_column_usage kcu
-			ON c.table_schema = kcu.table_schema
-			AND c.table_name = kcu.table_name
-			AND c.column_name = kcu.column_name
-		LEFT JOIN information_schema.table_constraints tc
-			ON kcu.constraint_name = tc.constraint_name
-			AND kcu.table_schema = tc.table_schema
-			AND kcu.table_name = tc.table_name
-		WHERE c.table_schema = $1 AND c.table_name = $2
-		ORDER BY c.ordinal_position;
+			a.attname AS column_name,
+			t.typname AS udt_name,
+			NOT a.attnotnull AS is_nullable,
+			EXISTS (
+				SELECT 1 FROM pg_index i 
+				WHERE i.indrelid = a.attrelid AND a.attnum = ANY(i.indkey) AND i.indisprimary
+			) AS is_primary,
+			COALESCE(pg_get_expr(d.adbin, d.adrelid), '') AS column_default
+		FROM pg_attribute a
+		JOIN pg_class c ON a.attrelid = c.oid
+		JOIN pg_namespace n ON c.relnamespace = n.oid
+		JOIN pg_type t ON a.atttypid = t.oid
+		LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+		WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
+		ORDER BY a.attnum;
 	`
 
 	rows, err := s.db.Query(ctx, query, schema, table)
@@ -149,10 +188,6 @@ func (s *MetaService) GetTableColumns(ctx context.Context, schema, table string)
 			return nil, err
 		}
 		columns = append(columns, col)
-	}
-
-	if rows.Err() != nil {
-		return nil, rows.Err()
 	}
 
 	return columns, nil
@@ -188,7 +223,13 @@ func (s *MetaService) RunQuery(ctx context.Context, sql string, migrationName st
 
 				rowMap := make(map[string]interface{})
 				for i, field := range fields {
-					rowMap[string(field.Name)] = values[i]
+					val := values[i]
+					// pgx returns UUID columns as [16]byte; convert to standard string form
+					if uuid, ok := val.([16]byte); ok {
+						val = fmt.Sprintf("%x-%x-%x-%x-%x",
+							uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16])
+					}
+					rowMap[string(field.Name)] = val
 				}
 				results = append(results, rowMap)
 			}
@@ -723,3 +764,156 @@ func (s *MetaService) GetTableStats(ctx context.Context, schema, table string) (
 	)
 	return stats, err
 }
+
+func (s *MetaService) GetTriggers(ctx context.Context, schema string) ([]TriggerMeta, error) {
+	query := `
+		SELECT 
+			trig.tgname AS name,
+			n.nspname AS schema,
+			rel.relname AS table,
+			p.proname AS function,
+			CASE 
+				WHEN (trig.tgtype & 2) = 2 THEN 'INSERT'
+				WHEN (trig.tgtype & 4) = 4 THEN 'DELETE'
+				WHEN (trig.tgtype & 16) = 16 THEN 'UPDATE'
+				ELSE 'UNKNOWN'
+			END AS events,
+			CASE 
+				WHEN (trig.tgtype & 1) = 1 THEN 'BEFORE'
+				ELSE 'AFTER'
+			END AS timing,
+			CASE 
+				WHEN (trig.tgtype & 1) = 1 THEN 'ROW'
+				ELSE 'STATEMENT'
+			END AS orientation,
+			CASE 
+				WHEN trig.tgenabled = 'D' THEN 'disabled'
+				ELSE 'enabled'
+			END AS enabled,
+			pg_get_triggerdef(trig.oid) AS definition
+		FROM pg_trigger trig
+		JOIN pg_class rel ON trig.tgrelid = rel.oid
+		JOIN pg_namespace n ON rel.relnamespace = n.oid
+		JOIN pg_proc p ON trig.tgfoid = p.oid
+		WHERE n.nspname = $1 AND trig.tgisinternal = false
+		ORDER BY trig.tgname;
+	`
+	rows, err := s.db.Query(ctx, query, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var triggers []TriggerMeta
+	for rows.Next() {
+		var t TriggerMeta
+		if err := rows.Scan(&t.Name, &t.Schema, &t.Table, &t.Function, &t.Events, &t.Timing, &t.Orientation, &t.Enabled, &t.Definition); err != nil {
+			return nil, err
+		}
+		triggers = append(triggers, t)
+	}
+	return triggers, nil
+}
+
+func (s *MetaService) CreateTrigger(ctx context.Context, req CreateTriggerRequest) error {
+	if req.Schema == "" {
+		req.Schema = "public"
+	}
+	
+	events := strings.Join(req.Events, " OR ")
+	sql := fmt.Sprintf(
+		"CREATE TRIGGER %s %s %s ON %s.%s FOR EACH %s EXECUTE FUNCTION %s()",
+		pgx.Identifier{req.Name}.Sanitize(),
+		req.Timing,
+		events,
+		pgx.Identifier{req.Schema}.Sanitize(),
+		pgx.Identifier{req.Table}.Sanitize(),
+		req.Orientation,
+		req.Function,
+	)
+
+	_, err := s.db.Exec(ctx, sql)
+	if err == nil {
+		_ = s.recordMigration(ctx, "create_trigger_"+req.Name, sql)
+	}
+	return err
+}
+
+func (s *MetaService) DeleteTrigger(ctx context.Context, schema, table, name string) error {
+	if schema == "" {
+		schema = "public"
+	}
+	sql := fmt.Sprintf("DROP TRIGGER %s ON %s.%s", 
+		pgx.Identifier{name}.Sanitize(),
+		pgx.Identifier{schema}.Sanitize(),
+		pgx.Identifier{table}.Sanitize(),
+	)
+	_, err := s.db.Exec(ctx, sql)
+	return err
+}
+
+func (s *MetaService) GetForeignKeys(ctx context.Context, schema string) ([]ForeignKeyMeta, error) {
+	query := `
+		SELECT
+			con.conname AS constraint_name,
+			n_src.nspname AS from_schema,
+			t_src.relname AS from_table,
+			a_src.attname AS from_column,
+			n_tgt.nspname AS to_schema,
+			t_tgt.relname AS to_table,
+			a_tgt.attname AS to_column,
+			CASE con.confdeltype 
+				WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' WHEN 'r' THEN 'RESTRICT' ELSE 'NO ACTION' 
+			END AS on_delete,
+			CASE con.confupdtype 
+				WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' WHEN 'r' THEN 'RESTRICT' ELSE 'NO ACTION' 
+			END AS on_update
+		FROM pg_constraint con
+		JOIN pg_class t_src ON t_src.oid = con.conrelid
+		JOIN pg_namespace n_src ON n_src.oid = t_src.relnamespace
+		JOIN pg_class t_tgt ON t_tgt.oid = con.confrelid
+		JOIN pg_namespace n_tgt ON n_tgt.oid = t_tgt.relnamespace
+		CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k_src(attnum, ord)
+		JOIN pg_attribute a_src ON a_src.attrelid = con.conrelid AND a_src.attnum = k_src.attnum
+		JOIN pg_attribute a_tgt ON a_tgt.attrelid = con.confrelid AND a_tgt.attnum = con.confkey[k_src.ord]
+		WHERE con.contype = 'f' AND n_src.nspname = $1;
+	`
+	rows, err := s.db.Query(ctx, query, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var fks []ForeignKeyMeta
+	for rows.Next() {
+		var fk ForeignKeyMeta
+		if err := rows.Scan(&fk.ConstraintName, &fk.FromSchema, &fk.FromTable, &fk.FromColumn, &fk.ToSchema, &fk.ToTable, &fk.ToColumn, &fk.OnDelete, &fk.OnUpdate); err != nil {
+			return nil, err
+		}
+		fks = append(fks, fk)
+	}
+	return fks, nil
+}
+
+func (s *MetaService) GetFullSchema(ctx context.Context, schema string) ([]SchemaTableMeta, error) {
+	tables, err := s.GetTables(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+
+	var schemaTables []SchemaTableMeta
+	for _, t := range tables {
+		cols, err := s.GetTableColumns(ctx, schema, t.Name)
+		if err != nil {
+			continue
+		}
+		schemaTables = append(schemaTables, SchemaTableMeta{
+			Name:    t.Name,
+			Schema:  t.Schema,
+			Columns: cols,
+			HasRLS:  t.HasRLS,
+		})
+	}
+	return schemaTables, nil
+}
+
