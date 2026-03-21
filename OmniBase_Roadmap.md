@@ -9,7 +9,7 @@ Version 1.0 · March 2026
 | MissionBuild the most complete, open-source, free BaaS ever made — combining the best features of Supabase, Firebase, Appwrite, Convex, and PocketBase into a single unified platform. | Promise100% open source. 100% self-hostable. 100% free forever. No paywalls on core features. No vendor lock-in. Your data stays yours. |
 | --- | --- |
 
-# 1\. Executive Summary
+# 1\. Executive Summary 
 
 OmniBase is a next-generation, open-source Backend-as-a-Service (BaaS) platform designed to be the last backend infrastructure a developer will ever need. It eliminates the need to stitch together Supabase for the database, Firebase for push notifications, Appwrite for file storage and hosting, Convex for reactive queries, and PocketBase for lightweight deployments. OmniBase brings all of these into a single, cohesive, production-grade system.
 
