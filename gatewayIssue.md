@@ -16,8 +16,9 @@ This resulted in your browser receiving **duplicate** CORS headers. Modern brows
 I updated the [proxy.go](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/services/gateway/internal/proxy/proxy.go:0:0-0:0) file to strip any header starting with `Access-Control-` from the internal service's response before sending it to the browser. This ensures only the Gateway's CORS settings are applied.
 
 ### Secondary Fix
-I also created a [.env](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/.env:0:0-0:0) file in your `dashboard/` directory:
-- **File**: [dashboard/.env](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/dashboard/.env:0:0-0:0)
+I also created a [.env](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/.env:0:0-0:0) files in your `dashboard/` directory:
+
+- **File**: [dashboard/.env](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/dashboard/.env:0:0-0:0) 
 - **Why**: This ensures Vite always knows the correct `PUBLIC_OMNIBASE_URL` for local development, preventing it from defaulting to the wrong port or being empty.
 
 **Next time this happens:** If you see "Could not connect" but the logs show the request reached the gateway, check the browser's "Network" tab in DevTools. If you see a "CORS error" or "Multiple CORS headers," you know the proxy is duplicating headers.
