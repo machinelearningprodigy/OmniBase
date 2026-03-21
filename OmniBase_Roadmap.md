@@ -1,6 +1,6 @@
 **OMNIBASE**
 
-The Ultimate Open-Source Backend-as-a-Service Platform
+The Ultimate Open-Source Backend-as-a-Service Platforms
 
 **Complete Product Roadmap & Architecture Blueprint**
 
