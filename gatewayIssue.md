@@ -22,6 +22,3 @@ I also created a [.env](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/.env:0:
 - **Why**: This ensures Vite always knows the correct `PUBLIC_OMNIBASE_URL` for local development, preventing it from defaulting to the wrong port or being empty.
 
 **Next time this happen:** If you see "Could not connect" but the logs show the request reached the gateway, check the browser's "Network" tab in DevTools. If you see a "CORS error" or "Multiple CORS headers," you know the proxy is duplicating headers.
-
-
-
