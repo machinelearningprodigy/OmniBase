@@ -10,7 +10,7 @@ The Gateway was acting as a middleman. When you requested data (like tables), th
 3. The internal service would send back the data **along with its own CORS headers** (`Access-Control-Allow-Origin: *`).
 4. The Gateway would then copy **all** those headers and add its **own** CORS headers on top.
 
-This resulted in your browser receiving **duplicate** CORS headers. Modern browsers (Chrome, Edge) strictly forbid multiple `Access-Control-Allow-Origin` headers and will immediately kill the connection. Even though the server was "up," the browser reported a network failure, which looked like the gateway was down.
+This resulted in your browser receiving **duplicate** CORS header. Modern browsers (Chrome, Edge) strictly forbid multiple `Access-Control-Allow-Origin` headers and will immediately kill the connection. Even though the server was "up," the browser reported a network failure, which looked like the gateway was down.
 
 ### The Fixes
 I updated the [proxy.go](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/services/gateway/internal/proxy/proxy.go:0:0-0:0) file to strip any header starting with `Access-Control-` from the internal service's response before sending it to the browser. This ensures only the Gateway's CORS settings are applied.
