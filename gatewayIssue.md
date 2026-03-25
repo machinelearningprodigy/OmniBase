@@ -4,7 +4,7 @@ The primary issue was in the **API Gateway's proxy logic**.
 [services/gateway/internal/proxy/proxy.go](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/services/gateway/internal/proxy/proxy.go:0:0-0:0)
 
 ### The Issue: Duplicated CORS Header 
-The Gateway was acting as a middleman. When you requested data (like tables), the Gateway would:
+The Gateway was acting as a middleman. When you requested data (like tables), the Gateway would: 
 1. Receive the request from your browser.
 2. Forward it to an internal service (like the Database Meta service).
 3. The internal service would send back the data **along with its own CORS headers** (`Access-Control-Allow-Origin: *`).
