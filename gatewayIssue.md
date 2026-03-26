@@ -15,7 +15,7 @@ This resulted in your browser receiving **duplicate** CORS header. Modern browse
 ### The Fixes
 I updated the [proxy.go](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/services/gateway/internal/proxy/proxy.go:0:0-0:0) file to strip any header starting with `Access-Control-` from the internal service's response before sending it to the browser. This ensures only the Gateway's CORS settings are applied.
 
-### Secondary Fix
+### Secondary Fix 
 I also created a [.env](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/.env:0:0-0:0) files in your `dashboard/` directory:
 
 - **File**: [dashboard/.env](cci:7://file:///c:/Users/Asus/Downloads/OmniBase/dashboard/.env:0:0-0:0) 
